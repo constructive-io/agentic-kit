@@ -3,6 +3,7 @@ import fetch from 'cross-fetch';
 export interface GenerateInput {
   model: string;
   prompt: string;
+  stream?: boolean;
 }
 
 interface TagsResponse {
@@ -40,11 +41,23 @@ export default class OllamaClient {
     return data.tags;
   }
 
-  public async generate(input: GenerateInput): Promise<string> {
+  public async generate(input: GenerateInput): Promise<string>;
+  public async generate(input: GenerateInput, onChunk: (chunk: string) => void): Promise<string | void>;
+  public async generate(
+    input: GenerateInput, 
+    onChunk?: (chunk: string) => void
+  ): Promise<string | void> {
+    if (input.stream && onChunk) {
+      return this.generateStreamingResponse(input.prompt, onChunk);
+    }
+    
     const response = await fetch(`${this.baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        ...input,
+        stream: input.stream || false
+      }),
     });
     if (!response.ok) {
       let errorText: string;
@@ -172,21 +185,26 @@ export default class OllamaClient {
     }
 
     const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
+    let done = false;
+    while (!done) {
+      const result = await reader.read();
+      done = result.done;
       if (done) break;
+      const value = result.value;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n').filter(Boolean);
+      if (value) {
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n').filter(Boolean);
 
-      for (const line of lines) {
-        try {
-          const data: OllamaResponse = JSON.parse(line);
-          if (data.response) {
-            onChunk(data.response);
+        for (const line of lines) {
+          try {
+            const data: OllamaResponse = JSON.parse(line);
+            if (data.response) {
+              onChunk(data.response);
+            }
+          } catch (error) {
+            console.error('Error parsing chunk:', error);
           }
-        } catch (error) {
-          console.error('Error parsing chunk:', error);
         }
       }
     }
