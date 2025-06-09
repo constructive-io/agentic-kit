@@ -28,6 +28,13 @@
     "lint": "eslint . --fix",
     "test": "jest",
     "test:watch": "jest --watch",
+    "init": "ts-node scripts/init.ts",
+    "chat": "ts-node scripts/chat.ts",
+    "list-projects": "ts-node scripts/list-projects.ts",
+    "get-project": "ts-node scripts/get-project.ts",
+    "project-summary": "ts-node scripts/project-summary.ts",
+    "health": "ts-node scripts/health.ts",
+    "instance-info": "ts-node scripts/instance-info.ts",
     "subscribe": "ts-node scripts/subscribe.ts"
   },
   "dependencies": {
