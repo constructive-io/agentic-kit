@@ -77,6 +77,40 @@ interface GenerateInput {
 
 Please open issues or pull requests on [GitHub](https://github.com/hyperweb-io/agentic-kit).
 
+## API Response Format
+
+The Ollama `/api/tags` endpoint returns the following JSON structure:
+
+```json
+{
+  "models": [
+    {
+      "name": "mistral:latest",
+      "model": "mistral:latest",
+      "modified_at": "2025-06-09T04:48:21.588888008Z",
+      "size": 4113301824,
+      "digest": "...",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "llama",
+        "families": ["llama"],
+        "parameter_size": "7.2B",
+        "quantization_level": "Q4_0"
+      }
+    }
+  ]
+}
+```
+
+The `listModels()` method extracts and returns just the model names:
+
+```ts
+const client = new OllamaClient('http://localhost:11434');
+const models = await client.listModels();
+console.log(models); // ["mistral:latest", "llama2:latest", ...]
+```
+
 ---
 
 © Hyperweb (formerly Cosmology). See LICENSE for full licensing and disclaimer. 

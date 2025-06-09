@@ -7,7 +7,22 @@ export interface GenerateInput {
 }
 
 interface TagsResponse {
-  tags: string[];
+  tags?: string[];
+  models?: Array<{
+    name: string;
+    model: string;
+    modified_at: string;
+    size: number;
+    digest: string;
+    details: {
+      parent_model: string;
+      format: string;
+      family: string;
+      families: string[];
+      parameter_size: string;
+      quantization_level: string;
+    };
+  }>;
 }
 
 interface GenerateResponse {
@@ -38,7 +53,18 @@ export default class OllamaClient {
       throw new Error(`Failed to list models: ${response.status} ${response.statusText}`);
     }
     const data: TagsResponse = await response.json();
-    return data.tags;
+    
+    // Handle actual API response format (models array)
+    if (data.models && Array.isArray(data.models)) {
+      return data.models.map(model => model.name);
+    }
+    
+    // Fallback to documented format (tags array) for backwards compatibility
+    if (data.tags && Array.isArray(data.tags)) {
+      return data.tags;
+    }
+    
+    return [];
   }
 
   public async generate(input: GenerateInput): Promise<string>;

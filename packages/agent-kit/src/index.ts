@@ -11,6 +11,7 @@ export interface StreamingOptions {
   onChunk?: (chunk: string) => void;
   onStateChange?: (state: string) => void;
   onError?: (error: Error) => void;
+  onComplete?: () => void;
 }
 
 export class OllamaAdapter implements AgentProvider {
@@ -92,10 +93,24 @@ export class AgentKit {
     }
 
     if (input.stream && options?.onChunk) {
-      return this.currentProvider.generateStreaming(input, options.onChunk);
+      try {
+        const result = await this.currentProvider.generateStreaming(input, options.onChunk);
+        options?.onComplete?.();
+        return result;
+      } catch (error) {
+        options?.onError?.(error as Error);
+        throw error;
+      }
     }
 
-    return this.currentProvider.generate(input);
+    try {
+      const result = await this.currentProvider.generate(input);
+      options?.onComplete?.();
+      return result;
+    } catch (error) {
+      options?.onError?.(error as Error);
+      throw error;
+    }
   }
 
   listProviders(): string[] {
