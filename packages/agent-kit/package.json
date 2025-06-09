@@ -1,6 +1,6 @@
 {
   "name": "agentic-kit",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "author": "Dan Lynch <pyramation@gmail.com>",
   "description": "Agentic Kit",
   "main": "index.js",
@@ -30,8 +30,8 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
-    "@agentic-kit/bradie": "^0.0.2",
-    "@agentic-kit/ollama": "^0.0.2"
+    "@agentic-kit/bradie": "^0.1.0",
+    "@agentic-kit/ollama": "^0.1.0"
   },
   "keywords": []
 }
