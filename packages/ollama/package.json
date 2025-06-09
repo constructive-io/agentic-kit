@@ -1,6 +1,6 @@
 {
   "name": "@agentic-kit/ollama",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Dan Lynch <pyramation@gmail.com>",
   "description": "Ollama",
   "main": "index.js",
