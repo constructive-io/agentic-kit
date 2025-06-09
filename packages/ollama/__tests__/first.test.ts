@@ -1,12 +1,14 @@
-import OllamaClient, { GenerateInput } from '../src';
+import fetch from 'cross-fetch';
 import { TextEncoder } from 'util';
+
+import OllamaClient, { GenerateInput } from '../src';
 
 describe('OllamaClient', () => {
   let client: OllamaClient;
 
   beforeEach(() => {
     client = new OllamaClient('http://localhost:11434');
-    global.fetch = jest.fn();
+    jest.clearAllMocks();
   });
 
   afterEach(() => {
@@ -14,34 +16,34 @@ describe('OllamaClient', () => {
   });
 
   it('listModels returns tags', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ tags: ['model1', 'model2'] }),
     });
     const models = await client.listModels();
     expect(models).toEqual(['model1', 'model2']);
-    expect(global.fetch).toHaveBeenCalledWith('http://localhost:11434/api/tags');
+    expect(fetch).toHaveBeenCalledWith('http://localhost:11434/api/tags');
   });
 
   it('generate returns text', async () => {
     const input: GenerateInput = { model: 'model1', prompt: 'hello' };
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ text: 'response text' }),
     });
     const text = await client.generate(input);
     expect(text).toBe('response text');
-    expect(global.fetch).toHaveBeenCalledWith('http://localhost:11434/api/generate', {
+    expect(fetch).toHaveBeenCalledWith('http://localhost:11434/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...input, stream: false }),
     });
   });
 
   it('pullModel resolves', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: true });
+    (fetch as jest.Mock).mockResolvedValueOnce({ ok: true });
     await expect(client.pullModel('model1')).resolves.toBeUndefined();
-    expect(global.fetch).toHaveBeenCalledWith('http://localhost:11434/api/pull', {
+    expect(fetch).toHaveBeenCalledWith('http://localhost:11434/api/pull', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'model1' }),
@@ -49,9 +51,9 @@ describe('OllamaClient', () => {
   });
 
   it('deleteModel resolves', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: true });
+    (fetch as jest.Mock).mockResolvedValueOnce({ ok: true });
     await expect(client.deleteModel('model1')).resolves.toBeUndefined();
-    expect(global.fetch).toHaveBeenCalledWith('http://localhost:11434/api/delete', {
+    expect(fetch).toHaveBeenCalledWith('http://localhost:11434/api/delete', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'model1' }),
@@ -59,13 +61,13 @@ describe('OllamaClient', () => {
   });
 
   it('generateEmbedding returns embedding array', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ embedding: [1, 2, 3] }),
     });
     const embedding = await client.generateEmbedding('test text');
     expect(embedding).toEqual([1, 2, 3]);
-    expect(global.fetch).toHaveBeenCalledWith('http://localhost:11434/api/embeddings', {
+    expect(fetch).toHaveBeenCalledWith('http://localhost:11434/api/embeddings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'mistral', prompt: 'test text' }),
@@ -73,13 +75,13 @@ describe('OllamaClient', () => {
   });
 
   it('generateResponse returns response without context', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ response: 'hello response' }),
     });
     const response = await client.generateResponse('hello');
     expect(response).toBe('hello response');
-    expect(global.fetch).toHaveBeenCalledWith('http://localhost:11434/api/generate', {
+    expect(fetch).toHaveBeenCalledWith('http://localhost:11434/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'mistral', prompt: 'hello', stream: false }),
@@ -90,13 +92,13 @@ describe('OllamaClient', () => {
     const context = 'ctx';
     const prompt = 'qry';
     const fullPrompt = `Context: ${context}\n\nQuestion: ${prompt}\n\nAnswer:`;
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ response: 'ctx response' }),
     });
     const response = await client.generateResponse(prompt, context);
     expect(response).toBe('ctx response');
-    expect(global.fetch).toHaveBeenCalledWith('http://localhost:11434/api/generate', {
+    expect(fetch).toHaveBeenCalledWith('http://localhost:11434/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'mistral', prompt: fullPrompt, stream: false }),
@@ -112,17 +114,37 @@ describe('OllamaClient', () => {
         .mockResolvedValueOnce({ done: false, value: encoded })
         .mockResolvedValueOnce({ done: true, value: undefined }),
     };
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       body: { getReader: () => mockReader },
     } as any);
     const chunks: string[] = [];
     await client.generateStreamingResponse('prompt', (chunk) => chunks.push(chunk));
     expect(chunks).toEqual(['chunk1']);
-    expect(global.fetch).toHaveBeenCalledWith('http://localhost:11434/api/generate', {
+    expect(fetch).toHaveBeenCalledWith('http://localhost:11434/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'mistral', prompt: 'prompt', stream: true }),
     });
+  });
+
+  it('generate with stream parameter calls streaming response', async () => {
+    const chunkData = JSON.stringify({ response: 'chunk1' }) + '\n';
+    const encoder = new TextEncoder();
+    const encoded = encoder.encode(chunkData);
+    const mockReader = {
+      read: jest.fn()
+        .mockResolvedValueOnce({ done: false, value: encoded })
+        .mockResolvedValueOnce({ done: true, value: undefined }),
+    };
+    (fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      body: { getReader: () => mockReader },
+    } as any);
+    
+    const chunks: string[] = [];
+    const input: GenerateInput = { model: 'model1', prompt: 'hello', stream: true };
+    await client.generate(input, (chunk) => chunks.push(chunk));
+    expect(chunks).toEqual(['chunk1']);
   });
 });
