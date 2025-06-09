@@ -102,7 +102,7 @@ export class Bradie {
   ): Promise<void> {
     if (!this.sessionId) throw new Error('Project not initialized');
     const interval = opts?.pollInterval ?? 1000;
-    const maxPolls = opts?.maxPolls ?? 30;
+    const maxPolls = opts?.maxPolls ?? Infinity;
     let polls = 0;
 
     return new Promise<void>((resolve, reject) => {
@@ -111,7 +111,15 @@ export class Bradie {
           const res = await fetch(
             `${this.domain}/api/act?sessionId=${this.sessionId}&requestId=${requestId}`
           );
-          if (!res.ok) throw new Error(`Poll failed: ${res.statusText}`);
+          if (!res.ok) {
+            let details: string;
+            try {
+              details = await res.text();
+            } catch {
+              details = 'No response body';
+            }
+            throw new Error(`Poll failed: ${res.status} ${res.statusText} - ${details}`);
+          }
           const data: ActResponse = await res.json();
           this.state = data.status;
 

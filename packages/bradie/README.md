@@ -1,12 +1,77 @@
-# Bradie
+# Bradie Client
 
-## Credits
+A Node.js client for the Bradie LLM service, providing project initialization, messaging, streaming responses, and log retrieval.
 
-🛠 Built by Hyperweb (formerly Cosmology) — if you like our tools, please checkout and contribute to [our github ⚛️](https://github.com/hyperweb-io)
+## Installation
 
+```bash
+npm install @agentic-kit/bradie
+# or
+yarn add @agentic-kit/bradie
+```
 
-## Disclaimer
+## Usage
 
-AS DESCRIBED IN THE LICENSES, THE SOFTWARE IS PROVIDED “AS IS”, AT YOUR OWN RISK, AND WITHOUT WARRANTIES OF ANY KIND.
+```typescript
+import { Bradie } from '@agentic-kit/bradie';
 
-No developer or entity involved in creating this software will be liable for any claims or damages whatsoever associated with your use, inability to use, or your interaction with other users of the code, including any direct, indirect, incidental, special, exemplary, punitive or consequential damages, or loss of profits, cryptocurrencies, tokens, or anything else of value.
+// 1. Configure callbacks and create client
+const client = new Bradie({
+  domain: 'http://localhost:3000',
+  onSystemMessage: (msg) => console.log('[system]', msg),
+  onAssistantReply: (msg) => console.log('[assistant]', msg),
+  onError: (err) => console.error('[error]', err),
+  onComplete: () => console.log('[complete]'),
+});
+
+// 2. Initialize a project (creates session & project IDs)
+const { sessionId, projectId } = await client.initProject(
+  'my-project',
+  '/path/to/project'
+);
+console.log('Session ID:', sessionId, 'Project ID:', projectId);
+
+// 3. Send a message and get a request ID
+const requestId = await client.sendMessage('Hello, Bradie!');
+console.log('Request ID:', requestId);
+
+// 4. Subscribe to streaming logs (chat messages & system events)
+await client.subscribeToResponse(requestId);
+```
+
+### fetchOnce
+
+Retrieve the complete array of command logs for a given request:
+
+```typescript
+const logs = await client.fetchOnce(requestId);
+console.log(logs);
+```
+
+### npm Subscribe Script
+
+A helper script is included to subscribe to a request from the command line:
+
+```bash
+cd packages/bradie
+npm run subscribe -- \
+  --sessionId <SESSION_ID> \
+  --requestId <REQUEST_ID> \
+  [--domain http://localhost:3000]
+```
+
+## API Reference
+
+- `new Bradie(config: { domain: string; onSystemMessage: (msg: string) => void; onAssistantReply: (msg: string) => void; onError?: (err: Error) => void; onComplete?: () => void; })`
+- `.initProject(projectName: string, projectPath: string): Promise<{ sessionId: string; projectId: string }>`
+- `.sendMessage(message: string): Promise<string>`
+- `.subscribeToResponse(requestId: string, opts?: { pollInterval?: number; maxPolls?: number }): Promise<void>`
+- `.fetchOnce(requestId: string): Promise<AgentCommandLog[]>`
+
+## Contributing
+
+Please open issues or pull requests on [GitHub](https://github.com/hyperweb-io/agentic-kit).
+
+---
+
+© Hyperweb (formerly Cosmology). See LICENSE for full licensing and disclaimer. 
