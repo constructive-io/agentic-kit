@@ -12,6 +12,7 @@
     "access": "restricted"
   },
   "workspaces": [
+    "legacy/*",
     "packages/*"
   ],
   "scripts": {

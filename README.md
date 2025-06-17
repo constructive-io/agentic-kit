@@ -1,84 +1,102 @@
-# Agentic Kit Monorepo
+# AgenticKit
 
-This repository contains the Agentic Kit core library and two official adapters for LLM services.
+> 🚀 **NEW**: AgenticKit is now a comprehensive AI agent platform - the TypeScript implementation of OpenHands!
 
-## Packages
+## What's New
 
-- **agentic-kit**: Core library providing a unified, streaming-capable interface for multiple LLM providers.
-- **@agentic-kit/ollama**: Adapter for the Ollama LLM server.
-- **@agentic-kit/bradie**: Adapter for the Bradie LLM service.
+AgenticKit has evolved from a simple LLM adapter library into a full-featured AI agent platform equivalent to OpenHands, but built in TypeScript.
 
-## Getting Started
+## Repository Structure
+
+```
+agentic-kit/
+├── legacy/             # Legacy LLM adapters (original functionality)
+│   ├── agentic-kit/    # Core library (unchanged)
+│   ├── bradie/         # Bradie adapter (unchanged)
+│   └── ollama/         # Ollama adapter (unchanged)
+├── packages/           # New AgenticKit platform packages
+│   ├── core/           # Core AgenticKit framework
+│   ├── agents/         # Agent implementations
+│   ├── runtime/        # Runtime environments
+│   └── [more packages...]
+└── README.md
+```
+
+## Legacy Packages (Simple LLM Integration)
+
+The original LLM adapter functionality is still available and unchanged in the `legacy/` folder:
+
+- **Package names**: Same as before (`agentic-kit`, `@agentic-kit/bradie`, `@agentic-kit/ollama`)
+- **Import statements**: No changes needed
+- **API**: Fully backward compatible
+
+## Quick Start
+
+### Legacy Adapters (Simple LLM Integration)
+
+For existing users, everything works exactly the same:
 
 ```bash
-# Clone the repo
-git clone https://github.com/hyperweb-io/agents.git
-cd agents
-
-# Install dependencies
-yarn install    # or npm install
-
-# Build all packages
-yarn build      # or npm run build
-
-# Run tests
-yarn test       # or npm test
-
-# Lint and format
-yarn lint       # or npm run lint
+npm install agentic-kit
 ```
 
-## Usage Examples
-
-### Core Library (agentic-kit)
 ```typescript
-import {
-  createOllamaKit,
-  createBradieKit,
-  createMultiProviderKit,
-  OllamaAdapter,
-  BradieAdapter
-} from 'agentic-kit';
+import { createOllamaKit } from 'agentic-kit';
 
-// Ollama only
-const ollamaKit = createOllamaKit('http://localhost:11434');
-const ollamaResp = await ollamaKit.generate({ model: 'mistral', prompt: 'Hello' });
-
-// Bradie only
-const bradieKit = createBradieKit({
-  domain: 'http://localhost:3000',
-  onSystemMessage: console.log,
-  onAssistantReply: console.log,
+const kit = createOllamaKit('http://localhost:11434');
+const response = await kit.generate({
+  model: 'mistral',
+  prompt: 'Hello, how are you?'
 });
-const bradieResp = await bradieKit.generate({ prompt: 'Hello' });
-
-// Multi-provider
-const multiKit = createMultiProviderKit();
-multiKit.addProvider(new OllamaAdapter('http://localhost:11434'));
-multiKit.addProvider(new BradieAdapter({
-  domain: 'http://localhost:3000',
-  onSystemMessage: console.log,
-  onAssistantReply: console.log
-}));
-const multiResp = await multiKit.generate({ model: 'mistral', prompt: 'Hello' });
 ```
 
-### Streaming
+### New AgenticKit Platform (Full Agent Capabilities)
+
+Coming soon! The new AgenticKit will provide:
+
+- 🤖 **Multiple Agent Types**: CodeAct, Browsing, Visual agents
+- 🏃 **Runtime Environments**: Docker, Local, Browser, Remote
+- 🔧 **Tool Ecosystem**: Extensible tool and plugin system
+- 💾 **Memory Management**: Conversation memory and state persistence
+- 🌐 **Web Interface**: Real-time web UI and API
+- 🔒 **Enterprise Security**: Authentication, authorization, sandboxing
+
 ```typescript
-await ollamaKit.generate(
-  { model: 'mistral', prompt: 'Hello', stream: true },
-  (chunk) => console.log('Ollama chunk:', chunk)
-);
-await bradieKit.generate(
-  { model: 'mistral', prompt: 'Hello', stream: true },
-  (chunk) => console.log('Bradie chunk:', chunk)
-);
+// Coming soon!
+import { AgenticKit, CodeActAgent } from 'agentic-kit';
+
+const kit = new AgenticKit();
+const agent = new CodeActAgent(llm, config);
+await kit.runAgent(agent, 'Write a Python script to analyze data');
 ```
 
-## Contributing
+## Development
 
-See individual package READMEs for package-specific docs, advanced configuration, and local development scripts.
+### Prerequisites
 
----
+- Node.js (version 18 or higher)
+- npm or yarn
 
-🛠 Built by Hyperweb (formerly Cosmology). See LICENSE for full license and disclaimer. 
+### Installation
+
+```bash
+git clone https://github.com/hyperweb-io/agentic-kit.git
+cd agentic-kit
+yarn install
+```
+
+### Building packages
+
+```bash
+# Build legacy packages
+yarn build
+
+# Build new AgenticKit packages (coming soon)
+yarn build:packages
+```
+
+### Running tests
+
+```bash
+yarn test
+```   
