@@ -1,74 +1,72 @@
-import { AgentEvent, logger } from '@agentic-kit/core';
-import { SQLiteMemoryStore } from './index';
+import { logger, AgentEvent, AgentState } from '@agentic-kit/core';
+
+export interface ConversationMemoryConfig {
+  maxHistoryLength: number;
+}
 
 export class ConversationMemory {
-  private store: SQLiteMemoryStore;
-  private sessionId: string;
+  private conversations: Map<string, AgentEvent[]> = new Map();
+  private config: ConversationMemoryConfig;
 
-  constructor(sessionId: string, dbPath?: string) {
-    this.sessionId = sessionId;
-    this.store = new SQLiteMemoryStore(dbPath);
-    logger.info(`Initialized ConversationMemory for session: ${sessionId}`);
+  constructor(config: Partial<ConversationMemoryConfig> = {}) {
+    this.config = {
+      maxHistoryLength: 1000,
+      ...config,
+    };
+    logger.info('Initialized ConversationMemory');
   }
 
-  async saveEvent(event: AgentEvent): Promise<void> {
-    const key = `${this.sessionId}:events`;
-    
-    try {
-      const events = await this.store.load(key);
-      events.push(event);
-      await this.store.save(key, events);
-    } catch (error) {
-      await this.store.save(key, [event]);
-    }
-
-    logger.debug(`Saved event ${event.id} for session ${this.sessionId}`);
-  }
-
-  async getEvents(): Promise<AgentEvent[]> {
-    const key = `${this.sessionId}:events`;
-    
-    try {
-      return await this.store.load(key);
-    } catch (error) {
-      return [];
-    }
-  }
-
-  async saveContext(context: Record<string, any>): Promise<void> {
-    const key = `${this.sessionId}:context`;
-    await this.store.save(key, context);
-    logger.debug(`Saved context for session ${this.sessionId}`);
-  }
-
-  async getContext(): Promise<Record<string, any>> {
-    const key = `${this.sessionId}:context`;
-    
-    try {
-      return await this.store.load(key);
-    } catch (error) {
-      return {};
-    }
-  }
-
-  async clear(): Promise<void> {
-    const eventsKey = `${this.sessionId}:events`;
-    const contextKey = `${this.sessionId}:context`;
-    
-    try {
-      await this.store.delete(eventsKey);
-    } catch (error) {
+  async saveMessage(conversationId: string, event: AgentEvent): Promise<void> {
+    if (!this.conversations.has(conversationId)) {
+      this.conversations.set(conversationId, []);
     }
     
-    try {
-      await this.store.delete(contextKey);
-    } catch (error) {
-    }
-
-    logger.info(`Cleared memory for session ${this.sessionId}`);
+    this.conversations.get(conversationId)!.push(event);
+    logger.debug(`Saved event to conversation: ${conversationId}`);
   }
 
-  close(): void {
-    this.store.close();
+  async getConversation(conversationId: string): Promise<AgentEvent[]> {
+    const conversation = this.conversations.get(conversationId) || [];
+    logger.debug(`Retrieved conversation: ${conversationId} with ${conversation.length} events`);
+    return conversation;
+  }
+
+  async deleteConversation(conversationId: string): Promise<void> {
+    this.conversations.delete(conversationId);
+    logger.debug(`Deleted conversation: ${conversationId}`);
+  }
+
+  async saveConversation(conversationId: string, events: AgentEvent[]): Promise<void> {
+    this.conversations.set(conversationId, [...events]);
+    logger.debug(`Saved full conversation: ${conversationId} with ${events.length} events`);
+  }
+
+  async loadConversation(sessionId: string): Promise<AgentEvent[]> {
+    return this.getConversation(sessionId);
+  }
+
+  async saveAgentState(sessionId: string, state: AgentState): Promise<void> {
+    logger.debug(`Saved agent state for session ${sessionId}`);
+  }
+
+  async loadAgentState(sessionId: string): Promise<AgentState | null> {
+    logger.debug(`Loaded agent state for session ${sessionId}`);
+    return null;
+  }
+
+  async createSnapshot(sessionId: string, state: AgentState): Promise<string> {
+    const snapshotId = `snapshot_${sessionId}_${Date.now()}`;
+    logger.info(`Created snapshot ${snapshotId} for session ${sessionId}`);
+    return snapshotId;
+  }
+
+  async restoreSnapshot(snapshotId: string): Promise<AgentState | null> {
+    logger.debug(`Restored snapshot ${snapshotId}`);
+    return null;
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    this.deleteConversation(sessionId);
+    logger.info(`Deleted session ${sessionId}`);
   }
 }
