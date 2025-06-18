@@ -30,7 +30,8 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
-    "@agentic-kit/core": "^0.1.0"
+    "@agentic-kit/core": "^0.1.0",
+    "better-sqlite3": "^9.2.2"
   },
   "keywords": [
     "memory",

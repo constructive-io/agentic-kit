@@ -11,12 +11,13 @@ module.exports = {
       },
     ],
   },
-  transformIgnorePatterns: [`/node_modules/*`],
+  transformIgnorePatterns: [`/node_modules/(?!(execa)/)`],
   testRegex: '(/__tests__/.*|(\\.|/)(test|spec))\\.(jsx?|tsx?)$',
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
   modulePathIgnorePatterns: ['dist/*'],
-  moduleNameMapping: {
+  moduleNameMapper: {
     '^@agentic-kit/(.*)$': '<rootDir>/../$1/src',
+    '^execa$': '<rootDir>/__mocks__/execa.js'
   },
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js']
 };
