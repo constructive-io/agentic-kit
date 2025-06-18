@@ -10,7 +10,8 @@ const mockGit = {
   log: jest.fn(() => Promise.resolve({ all: [] }))
 };
 
-module.exports = {
-  simpleGit: jest.fn(() => mockGit),
-  default: jest.fn(() => mockGit)
-};
+const simpleGit = jest.fn(() => mockGit);
+
+module.exports = simpleGit;
+module.exports.simpleGit = simpleGit;
+module.exports.default = simpleGit;

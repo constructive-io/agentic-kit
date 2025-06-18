@@ -8,6 +8,15 @@ const promises = {
     if (path === 'package.json') {
       return Promise.resolve('{"name": "@agentic-kit/tools"}');
     }
+    if (path.includes('/tmp/search-test.txt')) {
+      return Promise.resolve('This is a test document with some sample text for searching.');
+    }
+    if (path.includes('/tmp/regex-test.txt')) {
+      return Promise.resolve('function testFunction() {\n  return "hello world";\n}');
+    }
+    if (path.includes('/tmp/integration-test.txt')) {
+      return Promise.resolve('This is integration test content with multiple lines.\nSecond line for testing.\nThird line with more content.');
+    }
     if (path.includes('/tmp/')) {
       return Promise.resolve('This is a test document with some sample text for searching.');
     }
@@ -42,3 +51,5 @@ module.exports = {
   promises,
   default: { promises }
 };
+
+module.exports.promises = promises;

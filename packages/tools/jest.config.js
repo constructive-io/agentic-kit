@@ -18,6 +18,7 @@ module.exports = {
   moduleNameMapper: {
     '^@agentic-kit/(.*)$': '<rootDir>/../$1/src',
     '^fs$': '<rootDir>/__mocks__/fs.js',
+    '^fs/promises$': '<rootDir>/__mocks__/fs.js',
     '^simple-git$': '<rootDir>/__mocks__/simple-git.js'
   },
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js']
