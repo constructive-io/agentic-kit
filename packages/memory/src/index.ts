@@ -79,7 +79,8 @@ export class SQLiteMemoryStore implements MemoryStore {
     const row = stmt.get(key) as { data: string } | undefined;
     
     if (!row) {
-      throw new Error(`No data found for key: ${key}`);
+      logger.debug(`No data found for key: ${key}`);
+      return null;
     }
 
     logger.debug(`Loaded data for key: ${key}`);
@@ -90,11 +91,7 @@ export class SQLiteMemoryStore implements MemoryStore {
     const stmt = this.db.prepare('DELETE FROM memory WHERE key = ?');
     const result = stmt.run(key);
     
-    if (result.changes === 0) {
-      throw new Error(`No data found for key: ${key}`);
-    }
-
-    logger.debug(`Deleted data for key: ${key}`);
+    logger.debug(`Deleted data for key: ${key} (${result.changes} rows affected)`);
   }
 
   async list(): Promise<string[]> {

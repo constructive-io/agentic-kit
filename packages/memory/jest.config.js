@@ -15,7 +15,7 @@ module.exports = {
   testRegex: '(/__tests__/.*|(\\.|/)(test|spec))\\.(jsx?|tsx?)$',
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
   modulePathIgnorePatterns: ['dist/*'],
-  moduleNameMapping: {
+  moduleNameMapper: {
     '^@agentic-kit/(.*)$': '<rootDir>/../$1/src',
   },
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js']
