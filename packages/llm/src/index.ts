@@ -1,6 +1,8 @@
 import { request } from 'undici';
 import { logger, LLMProvider, LLMOptions } from '@agentic-kit/core';
 
+export { LLMProvider, LLMOptions };
+
 export class OpenAIProvider implements LLMProvider {
   public readonly name = 'OpenAI';
   private apiKey: string;

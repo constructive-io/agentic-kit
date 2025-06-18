@@ -6,6 +6,7 @@ export interface AgentEvent {
   id: string;
   timestamp: Date;
   source: string;
+  type: string;
 }
 
 export interface Action extends AgentEvent {

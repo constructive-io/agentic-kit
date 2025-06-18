@@ -3,8 +3,8 @@ import {
   AgentState, 
   Action, 
   logger,
+  LLMProvider,
 } from '@agentic-kit/core';
-import { LLMProvider } from '@agentic-kit/llm';
 
 export class CodeActAgent implements Agent {
   public readonly name = 'CodeActAgent';
