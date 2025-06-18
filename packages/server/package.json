@@ -1,0 +1,49 @@
+{
+  "name": "@agentic-kit/server",
+  "version": "0.1.0",
+  "author": "Dan Lynch <pyramation@gmail.com>",
+  "description": "AgenticKit Server - HTTP API and web interface",
+  "main": "index.js",
+  "module": "esm/index.js",
+  "types": "index.d.ts",
+  "homepage": "https://github.com/hyperweb-io/agentic-kit",
+  "license": "SEE LICENSE IN LICENSE",
+  "publishConfig": {
+    "access": "public",
+    "directory": "dist"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hyperweb-io/agentic-kit"
+  },
+  "bugs": {
+    "url": "https://github.com/hyperweb-io/agentic-kit/issues"
+  },
+  "scripts": {
+    "copy": "copyfiles -f ../../LICENSE README.md package.json dist",
+    "clean": "rimraf dist/**",
+    "prepare": "npm run build",
+    "build": "npm run clean; tsc; tsc -p tsconfig.esm.json; npm run copy",
+    "build:dev": "npm run clean; tsc --declarationMap; tsc -p tsconfig.esm.json; npm run copy",
+    "lint": "eslint . --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@agentic-kit/core": "^0.1.0",
+    "@agentic-kit/agents": "^0.1.0",
+    "@agentic-kit/runtime": "^0.1.0",
+    "fastify": "^4.24.3",
+    "@fastify/cors": "^8.4.0",
+    "@fastify/websocket": "^8.3.1"
+  },
+  "keywords": [
+    "server",
+    "api",
+    "http",
+    "websocket",
+    "fastify"
+  ]
+}

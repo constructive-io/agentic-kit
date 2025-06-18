@@ -1,0 +1,44 @@
+{
+  "name": "@agentic-kit/runtime",
+  "version": "0.1.0",
+  "author": "Dan Lynch <pyramation@gmail.com>",
+  "description": "AgenticKit Runtime - Docker, Local, Browser, and Remote environments",
+  "main": "index.js",
+  "module": "esm/index.js",
+  "types": "index.d.ts",
+  "homepage": "https://github.com/hyperweb-io/agentic-kit",
+  "license": "SEE LICENSE IN LICENSE",
+  "publishConfig": {
+    "access": "public",
+    "directory": "dist"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hyperweb-io/agentic-kit"
+  },
+  "bugs": {
+    "url": "https://github.com/hyperweb-io/agentic-kit/issues"
+  },
+  "scripts": {
+    "copy": "copyfiles -f ../../LICENSE README.md package.json dist",
+    "clean": "rimraf dist/**",
+    "prepare": "npm run build",
+    "build": "npm run clean; tsc; tsc -p tsconfig.esm.json; npm run copy",
+    "build:dev": "npm run clean; tsc --declarationMap; tsc -p tsconfig.esm.json; npm run copy",
+    "lint": "eslint . --fix",
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "@agentic-kit/core": "^0.1.0",
+    "execa": "^8.0.1",
+    "playwright": "^1.40.1"
+  },
+  "keywords": [
+    "runtime",
+    "docker",
+    "browser",
+    "environment",
+    "sandbox"
+  ]
+}
