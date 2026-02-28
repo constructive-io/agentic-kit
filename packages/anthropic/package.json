@@ -1,8 +1,8 @@
 {
-  "name": "agentic-kit",
-  "version": "0.3.0",
+  "name": "@agentic-kit/anthropic",
+  "version": "0.1.0",
   "author": "Dan Lynch <pyramation@gmail.com>",
-  "description": "Provider-agnostic LLM adapter with streaming and multi-turn support",
+  "description": "Anthropic (Claude) adapter for agentic-kit",
   "main": "index.js",
   "module": "esm/index.js",
   "types": "index.d.ts",
@@ -29,10 +29,8 @@
     "test": "jest",
     "test:watch": "jest --watch"
   },
+  "keywords": [],
   "dependencies": {
-    "@agentic-kit/anthropic": "^0.1.0",
-    "@agentic-kit/ollama": "^0.1.2",
-    "@agentic-kit/openai": "^0.1.0"
-  },
-  "keywords": []
+    "cross-fetch": "^4.1.0"
+  }
 }

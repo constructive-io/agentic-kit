@@ -1,6 +1,11 @@
 import OllamaClient, { ChatMessage, GenerateInput } from '@agentic-kit/ollama';
+import { AnthropicAdapter, type AnthropicOptions } from '@agentic-kit/anthropic';
+import { OpenAIAdapter, type OpenAIOptions } from '@agentic-kit/openai';
 
 export type { ChatMessage, GenerateInput };
+export { OllamaClient };
+export { AnthropicAdapter, type AnthropicOptions };
+export { OpenAIAdapter, type OpenAIOptions };
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -60,13 +65,8 @@ export class AgentKit {
     return this;
   }
 
-  getCurrentProvider(): AgentProvider | undefined {
-    return this.current;
-  }
-
-  listProviders(): string[] {
-    return Array.from(this.providers.keys());
-  }
+  getCurrentProvider(): AgentProvider | undefined { return this.current; }
+  listProviders(): string[] { return Array.from(this.providers.keys()); }
 
   async generate(input: GenerateInput, options?: StreamingOptions): Promise<string | void> {
     if (!this.current) throw new Error('No provider set. Call addProvider() first.');
@@ -101,6 +101,14 @@ export class AgentKit {
 
 export function createOllamaKit(baseUrl?: string): AgentKit {
   return new AgentKit().addProvider(new OllamaAdapter(baseUrl));
+}
+
+export function createAnthropicKit(options: AnthropicOptions | string): AgentKit {
+  return new AgentKit().addProvider(new AnthropicAdapter(options));
+}
+
+export function createOpenAIKit(options: OpenAIOptions | string): AgentKit {
+  return new AgentKit().addProvider(new OpenAIAdapter(options));
 }
 
 export function createMultiProviderKit(): AgentKit {

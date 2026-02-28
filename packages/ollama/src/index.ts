@@ -17,6 +17,7 @@ export interface GenerateInput {
   system?: string;
   stream?: boolean;
   temperature?: number;
+  maxTokens?: number;
 }
 
 interface OllamaGenerateResponse {
