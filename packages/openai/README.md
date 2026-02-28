@@ -19,3 +19,4 @@ OpenAI (and OpenAI-compatible) adapter for agentic-kit. Works with GPT models, L
 ```bash
 npm install @agentic-kit/openai
 ```
+

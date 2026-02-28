@@ -20,6 +20,7 @@ A JavaScript/TypeScript client for the Ollama LLM server, supporting model listi
 npm install @agentic-kit/ollama
 ```
 
+
 ## Usage
 
 ```typescript

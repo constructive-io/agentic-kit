@@ -19,3 +19,4 @@ Anthropic (Claude) adapter for agentic-kit with SSE streaming support.
 ```bash
 npm install @agentic-kit/anthropic
 ```
+
