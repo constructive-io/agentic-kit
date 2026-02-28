@@ -21,6 +21,7 @@
   },
   "scripts": {
     "clean": "makage clean",
+    "prepack": "npm run build",
     "build": "makage build",
     "build:dev": "makage build --dev",
     "lint": "eslint . --fix",
