@@ -1,11 +1,11 @@
 {
-  "name": "agents",
+  "name": "agentic-kit",
   "version": "0.0.1",
   "author": "Dan Lynch <pyramation@gmail.com>",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/hyperweb-io/agents"
+    "url": "git@github.com:pyramation-studio/agentic-kit.git"
   },
   "license": "SEE LICENSE IN LICENSE",
   "publishConfig": {

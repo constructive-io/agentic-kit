@@ -6,7 +6,7 @@
   "main": "index.js",
   "module": "esm/index.js",
   "types": "index.d.ts",
-  "homepage": "https://github.com/hyperweb-io/agentic-kit",
+  "homepage": "https://github.com/pyramation-studio/agentic-kit",
   "license": "SEE LICENSE IN LICENSE",
   "publishConfig": {
     "access": "public",
@@ -14,10 +14,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hyperweb-io/agentic-kit"
+    "url": "git@github.com:pyramation-studio/agentic-kit.git"
   },
   "bugs": {
-    "url": "https://github.com/hyperweb-io/agentic-kit/issues"
+    "url": "https://github.com/pyramation-studio/agentic-kit/issues"
   },
   "scripts": {
     "copy": "copyfiles -f ../../LICENSE README.md package.json dist",

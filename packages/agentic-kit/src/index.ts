@@ -1,10 +1,8 @@
-import OllamaClient, { GenerateInput } from '@agentic-kit/ollama';
+import OllamaClient, { ChatMessage, GenerateInput } from '@agentic-kit/ollama';
 
-export interface AgentProvider {
-  name: string;
-  generate(input: GenerateInput): Promise<string>;
-  generateStreaming(input: GenerateInput, onChunk: (chunk: string) => void): Promise<void>;
-}
+export type { ChatMessage, GenerateInput };
+
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
 export interface StreamingOptions {
   onChunk?: (chunk: string) => void;
@@ -12,6 +10,15 @@ export interface StreamingOptions {
   onError?: (error: Error) => void;
   onComplete?: () => void;
 }
+
+export interface AgentProvider {
+  readonly name: string;
+  generate(input: GenerateInput): Promise<string>;
+  generateStreaming(input: GenerateInput, onChunk: (chunk: string) => void): Promise<void>;
+  listModels?(): Promise<string[]>;
+}
+
+// ─── Ollama Adapter ───────────────────────────────────────────────────────────
 
 export class OllamaAdapter implements AgentProvider {
   public readonly name = 'ollama';
@@ -22,72 +29,78 @@ export class OllamaAdapter implements AgentProvider {
   }
 
   async generate(input: GenerateInput): Promise<string> {
-    return this.client.generate(input);
+    return this.client.generate(input) as Promise<string>;
   }
 
   async generateStreaming(input: GenerateInput, onChunk: (chunk: string) => void): Promise<void> {
-    await this.client.generate({ ...input, stream: true }, onChunk);
+    return this.client.generate(input, onChunk);
+  }
+
+  async listModels(): Promise<string[]> {
+    return this.client.listModels();
   }
 }
 
-export class AgentKit {
-  private providers: Map<string, AgentProvider> = new Map();
-  private currentProvider?: AgentProvider;
+// ─── AgentKit ─────────────────────────────────────────────────────────────────
 
-  addProvider(provider: AgentProvider): void {
+export class AgentKit {
+  private providers = new Map<string, AgentProvider>();
+  private current?: AgentProvider;
+
+  addProvider(provider: AgentProvider): this {
     this.providers.set(provider.name, provider);
-    if (!this.currentProvider) {
-      this.currentProvider = provider;
-    }
+    if (!this.current) this.current = provider;
+    return this;
   }
 
-  setProvider(name: string): void {
+  setProvider(name: string): this {
     const provider = this.providers.get(name);
-    if (!provider) {
-      throw new Error(`Provider '${name}' not found`);
-    }
-    this.currentProvider = provider;
+    if (!provider) throw new Error(`Provider '${name}' not found`);
+    this.current = provider;
+    return this;
   }
 
   getCurrentProvider(): AgentProvider | undefined {
-    return this.currentProvider;
-  }
-
-  async generate(input: GenerateInput, options?: StreamingOptions): Promise<string | void> {
-    if (!this.currentProvider) {
-      throw new Error('No provider set');
-    }
-
-    if (input.stream && options?.onChunk) {
-      try {
-        const result = await this.currentProvider.generateStreaming(input, options.onChunk);
-        options?.onComplete?.();
-        return result;
-      } catch (error) {
-        options?.onError?.(error as Error);
-        throw error;
-      }
-    }
-
-    try {
-      const result = await this.currentProvider.generate(input);
-      options?.onComplete?.();
-      return result;
-    } catch (error) {
-      options?.onError?.(error as Error);
-      throw error;
-    }
+    return this.current;
   }
 
   listProviders(): string[] {
     return Array.from(this.providers.keys());
   }
+
+  async generate(input: GenerateInput, options?: StreamingOptions): Promise<string | void> {
+    if (!this.current) throw new Error('No provider set. Call addProvider() first.');
+
+    if (options?.onChunk) {
+      try {
+        await this.current.generateStreaming(input, options.onChunk);
+        options.onComplete?.();
+      } catch (err) {
+        options.onError?.(err as Error);
+        throw err;
+      }
+      return;
+    }
+
+    try {
+      const result = await this.current.generate(input);
+      options?.onComplete?.();
+      return result;
+    } catch (err) {
+      options?.onError?.(err as Error);
+      throw err;
+    }
+  }
+
+  async listModels(): Promise<string[]> {
+    return this.current?.listModels?.() ?? [];
+  }
 }
 
+// ─── Factory helpers ──────────────────────────────────────────────────────────
+
 export function createOllamaKit(baseUrl?: string): AgentKit {
-  const kit = new AgentKit();
-  kit.addProvider(new OllamaAdapter(baseUrl));
-  return kit;
+  return new AgentKit().addProvider(new OllamaAdapter(baseUrl));
 }
 
 export function createMultiProviderKit(): AgentKit {

@@ -12,7 +12,7 @@
   "registry": "https://registry.npmjs.org",
   "command": {
     "create": {
-      "homepage": "https://github.com/hyperweb-io/agentic-kit Tools",
+      "homepage": "https://github.com/pyramation-studio/agentic-kit",
       "license": "SEE LICENSE IN LICENSE",
       "access": "restricted"
     },
