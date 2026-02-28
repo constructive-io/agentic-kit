@@ -28,9 +28,12 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
-    "@agentic-kit/anthropic": "^0.1.0",
-    "@agentic-kit/ollama": "^0.1.2",
-    "@agentic-kit/openai": "^0.1.0"
+    "@agentic-kit/anthropic": "workspace:*",
+    "@agentic-kit/ollama": "workspace:*",
+    "@agentic-kit/openai": "workspace:*"
+  },
+  "devDependencies": {
+    "cross-fetch": "^4.1.0"
   },
   "keywords": []
 }
