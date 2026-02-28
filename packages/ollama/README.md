@@ -1,4 +1,16 @@
-# Ollama Client
+# @agentic-kit/ollama
+
+<p align="center" width="100%">
+  <img height="250" src="https://raw.githubusercontent.com/constructive-io/constructive/refs/heads/main/assets/outline-logo.svg" />
+</p>
+
+<p align="center" width="100%">
+  <a href="https://github.com/constructive-io/agentic-kit/actions/workflows/run-tests.yaml">
+    <img height="20" src="https://github.com/constructive-io/agentic-kit/actions/workflows/run-tests.yaml/badge.svg" />
+  </a>
+   <a href="https://github.com/constructive-io/agentic-kit/blob/main/LICENSE"><img height="20" src="https://img.shields.io/badge/license-MIT-blue.svg"/></a>
+   <a href="https://www.npmjs.com/package/@agentic-kit/ollama"><img height="20" src="https://img.shields.io/github/package-json/v/constructive-io/agentic-kit?filename=packages%2Follama%2Fpackage.json"/></a>
+</p>
 
 A JavaScript/TypeScript client for the Ollama LLM server, supporting model listing, text generation, streaming responses, embeddings, and model management.
 
@@ -6,8 +18,6 @@ A JavaScript/TypeScript client for the Ollama LLM server, supporting model listi
 
 ```bash
 npm install @agentic-kit/ollama
-# or
-yarn add @agentic-kit/ollama
 ```
 
 ## Usage
@@ -75,42 +85,4 @@ interface GenerateInput {
 
 ## Contributing
 
-Please open issues or pull requests on [GitHub](https://github.com/hyperweb-io/agentic-kit).
-
-## API Response Format
-
-The Ollama `/api/tags` endpoint returns the following JSON structure:
-
-```json
-{
-  "models": [
-    {
-      "name": "mistral:latest",
-      "model": "mistral:latest",
-      "modified_at": "2025-06-09T04:48:21.588888008Z",
-      "size": 4113301824,
-      "digest": "...",
-      "details": {
-        "parent_model": "",
-        "format": "gguf",
-        "family": "llama",
-        "families": ["llama"],
-        "parameter_size": "7.2B",
-        "quantization_level": "Q4_0"
-      }
-    }
-  ]
-}
-```
-
-The `listModels()` method extracts and returns just the model names:
-
-```ts
-const client = new OllamaClient('http://localhost:11434');
-const models = await client.listModels();
-console.log(models); // ["mistral:latest", "llama2:latest", ...]
-```
-
----
-
-© Hyperweb (formerly Cosmology). See LICENSE for full licensing and disclaimer. 
+Please open issues or pull requests on [GitHub](https://github.com/constructive-io/agentic-kit).

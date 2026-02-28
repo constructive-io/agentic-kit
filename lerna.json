@@ -12,7 +12,7 @@
   "registry": "https://registry.npmjs.org",
   "command": {
     "create": {
-      "homepage": "https://github.com/pyramation-studio/agentic-kit",
+      "homepage": "https://github.com/constructive-io/agentic-kit",
       "license": "SEE LICENSE IN LICENSE",
       "access": "restricted"
     },
