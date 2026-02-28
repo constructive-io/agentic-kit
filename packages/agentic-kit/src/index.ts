@@ -1,4 +1,3 @@
-import { Bradie, BradieState } from '@agentic-kit/bradie';
 import OllamaClient, { GenerateInput } from '@agentic-kit/ollama';
 
 export interface AgentProvider {
@@ -28,39 +27,6 @@ export class OllamaAdapter implements AgentProvider {
 
   async generateStreaming(input: GenerateInput, onChunk: (chunk: string) => void): Promise<void> {
     await this.client.generate({ ...input, stream: true }, onChunk);
-  }
-}
-
-export class BradieAdapter implements AgentProvider {
-  public readonly name = 'bradie';
-  private client: Bradie;
-
-  constructor(config: {
-    domain: string;
-    onSystemMessage: (msg: string) => void;
-    onAssistantReply: (msg: string) => void;
-    onError?: (err: Error) => void;
-    onComplete?: () => void;
-  }) {
-    this.client = new Bradie(config);
-  }
-
-  async generate(input: GenerateInput): Promise<string> {
-    const requestId = await this.client.sendMessage(input.prompt);
-    return new Promise((resolve, reject) => {
-      this.client.subscribeToResponse(requestId)
-        .then(() => resolve('Response completed'))
-        .catch(reject);
-    });
-  }
-
-  async generateStreaming(input: GenerateInput, onChunk: (chunk: string) => void): Promise<void> {
-    const requestId = await this.client.sendMessage(input.prompt);
-    await this.client.subscribeToResponse(requestId);
-  }
-
-  getState(): BradieState {
-    return this.client.getState();
   }
 }
 
@@ -121,18 +87,6 @@ export class AgentKit {
 export function createOllamaKit(baseUrl?: string): AgentKit {
   const kit = new AgentKit();
   kit.addProvider(new OllamaAdapter(baseUrl));
-  return kit;
-}
-
-export function createBradieKit(config: {
-  domain: string;
-  onSystemMessage: (msg: string) => void;
-  onAssistantReply: (msg: string) => void;
-  onError?: (err: Error) => void;
-  onComplete?: () => void;
-}): AgentKit {
-  const kit = new AgentKit();
-  kit.addProvider(new BradieAdapter(config));
   return kit;
 }
 

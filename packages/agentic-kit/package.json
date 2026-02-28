@@ -30,7 +30,6 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
-    "@agentic-kit/bradie": "^0.1.2",
     "@agentic-kit/ollama": "^0.1.2"
   },
   "keywords": []

@@ -1,108 +1,64 @@
 # Agentic Kit
 
-Agentic Kit is the core library providing a unified, streaming-capable interface for multiple LLM providers. It lets you plug in any supported adapter and switch between them at runtime.
+A unified, streaming-capable interface for multiple LLM providers. Plug in any supported adapter and swap between them at runtime.
 
 ## Installation
 
 ```bash
 npm install agentic-kit
-# or
-yarn add agentic-kit
 ```
-
-Agentic Kit includes adapters for Ollama and Bradie out of the box.
 
 ## Quick Start
 
 ```typescript
-import {
-  // Adapters
-  OllamaAdapter,
-  BradieAdapter,
+import { createOllamaKit, createMultiProviderKit, OllamaAdapter, AgentKit } from 'agentic-kit';
 
-  // Factory functions
-  createOllamaKit,
-  createBradieKit,
-  createMultiProviderKit,
+// Ollama
+const kit = createOllamaKit('http://localhost:11434');
+const text = await kit.generate({ model: 'mistral', prompt: 'Hello' });
 
-  // Core type
-  AgentKit
-} from 'agentic-kit';
-
-// Ollama-only client
-const ollamaKit: AgentKit = createOllamaKit('http://localhost:11434');
-const text = await ollamaKit.generate({ model: 'mistral', prompt: 'Hello' });
-console.log(text);
-
-// Bradie-only client
-const bradieKit: AgentKit = createBradieKit({
-  domain: 'http://localhost:3000',
-  onSystemMessage: (msg) => console.log('[system]', msg),
-  onAssistantReply: (msg) => console.log('[assistant]', msg),
-});
-await bradieKit.generate({ prompt: 'Hello' });
-
-// Multi-provider client
-const multiKit = createMultiProviderKit();
-multiKit.addProvider(new OllamaAdapter('http://localhost:11434'));
-multiKit.addProvider(new BradieAdapter({
-  domain: 'http://localhost:3000',
-  onSystemMessage: console.log,
-  onAssistantReply: console.log
-}));
-const reply = await multiKit.generate({ model: 'mistral', prompt: 'Hello' });
-console.log(reply);
+// Multi-provider with fallback
+const multi = createMultiProviderKit();
+multi.addProvider(new OllamaAdapter('http://localhost:11434'));
+const reply = await multi.generate({ model: 'mistral', prompt: 'Hello' });
 ```
 
 ## Streaming
 
-Both adapters support a streaming mode that invokes a callback for each data chunk.
-
 ```typescript
-await ollamaKit.generate(
+await kit.generate(
   { model: 'mistral', prompt: 'Hello', stream: true },
-  (chunk) => console.log('Ollama chunk:', chunk)
-);
-
-await bradieKit.generate(
-  { model: 'mistral', prompt: 'Hello', stream: true },
-  (chunk) => console.log('Bradie chunk:', chunk)
+  { onChunk: (chunk) => process.stdout.write(chunk) }
 );
 ```
 
 ## API Reference
 
-### AgentKit
+### `AgentKit`
 
 - `.generate(input: GenerateInput, options?: StreamingOptions): Promise<string | void>`
-- `.listProviders(): string[]`
+- `.addProvider(provider: AgentProvider): void`
 - `.setProvider(name: string): void`
+- `.listProviders(): string[]`
 - `.getCurrentProvider(): AgentProvider | undefined`
 
-### GenerateInput
+### `GenerateInput`
 
 ```ts
 interface GenerateInput {
-  model?: string;      // For services that support named models
-  prompt: string;      // The text prompt
-  stream?: boolean;    // If true, use streaming mode
+  model: string;
+  prompt: string;
+  stream?: boolean;
 }
 ```
 
-### StreamingOptions
+### `StreamingOptions`
 
 ```ts
 interface StreamingOptions {
   onChunk?: (chunk: string) => void;
   onStateChange?: (state: string) => void;
   onError?: (error: Error) => void;
+  onComplete?: () => void;
 }
 ```
-
-## Contributing
-
-Contributions are welcome! Please submit issues and pull requests on [GitHub](https://github.com/hyperweb-io/agentic-kit).
-
----
-
-© Hyperweb (formerly Cosmology). See LICENSE for full licensing and disclaimer. 
