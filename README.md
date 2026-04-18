@@ -11,14 +11,16 @@
    <a href="https://github.com/constructive-io/agentic-kit/blob/main/LICENSE"><img height="20" src="https://img.shields.io/badge/license-MIT-blue.svg"/></a>
 </p>
 
-A unified, streaming-capable interface for multiple LLM providers.
+A provider-portable LLM toolkit with structured streaming, model registries,
+cross-provider message normalization, and an optional stateful agent runtime.
 
 ## Packages
 
-- **agentic-kit** — core library with provider abstraction and `AgentKit` manager
+- **agentic-kit** — low-level portability layer with model descriptors, registries, structured event streams, and compatibility helpers
+- **@agentic-kit/agent** — minimal stateful runtime with sequential tool execution and lifecycle events
 - **@agentic-kit/ollama** — adapter for local Ollama inference
 - **@agentic-kit/anthropic** — adapter for Anthropic Claude models
-- **@agentic-kit/openai** — adapter for OpenAI and OpenAI-compatible APIs
+- **@agentic-kit/openai** — generalized adapter for OpenAI-compatible chat completion APIs
 
 ## Getting Started
 
@@ -33,14 +35,14 @@ yarn test
 ## Usage
 
 ```typescript
-import { createOllamaKit, createMultiProviderKit, OllamaAdapter } from 'agentic-kit';
+import { complete, getModel } from 'agentic-kit';
 
-const kit = createOllamaKit('http://localhost:11434');
-const text = await kit.generate({ model: 'mistral', prompt: 'Hello' });
+const model = getModel('openai', 'gpt-4o-mini');
+const message = await complete(model!, {
+  messages: [{ role: 'user', content: 'Hello', timestamp: Date.now() }],
+});
 
-// Multi-provider
-const multi = createMultiProviderKit();
-multi.addProvider(new OllamaAdapter('http://localhost:11434'));
+console.log(message.content);
 ```
 
 ## Contributing

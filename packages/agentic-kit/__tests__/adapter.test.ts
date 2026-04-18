@@ -1,130 +1,137 @@
-import fetch from 'cross-fetch';
-import { TextEncoder } from 'util';
+import {
+  AgentKit,
+  createAssistantMessageEventStream,
+  getMessageText,
+  transformMessages,
+  type ModelDescriptor,
+  type ProviderAdapter,
+} from '../src';
 
-import { AgentKit, OllamaAdapter } from '../src';
+function createFakeModel(): ModelDescriptor {
+  return {
+    id: 'demo',
+    name: 'Demo',
+    api: 'fake-api',
+    provider: 'fake',
+    baseUrl: 'http://fake.local',
+    input: ['text'],
+    reasoning: false,
+    tools: true,
+  };
+}
 
-describe('AgentKit', () => {
-  let kit: AgentKit;
-
-  beforeEach(() => {
-    kit = new AgentKit();
-    jest.clearAllMocks();
-  });
-
-  afterEach(() => {
-    jest.resetAllMocks();
-  });
-
-  // ── Provider management ─────────────────────────────────────────────────────
-
-  it('addProvider registers and sets as current', () => {
-    const adapter = new OllamaAdapter();
-    kit.addProvider(adapter);
-    expect(kit.getCurrentProvider()).toBe(adapter);
-    expect(kit.listProviders()).toEqual(['ollama']);
-  });
-
-  it('addProvider returns this for chaining', () => {
-    const adapter = new OllamaAdapter();
-    const result = kit.addProvider(adapter);
-    expect(result).toBe(kit);
-  });
-
-  it('setProvider switches current provider', () => {
-    const a = new OllamaAdapter('http://a:11434');
-    const b = new OllamaAdapter('http://b:11434');
-    // Give b a different name via subclass to test switching
-    (b as any).name = 'ollama-b';
-    kit.addProvider(a).addProvider(b);
-    kit.setProvider('ollama-b');
-    expect(kit.getCurrentProvider()).toBe(b);
-  });
-
-  it('setProvider throws for unknown provider', () => {
-    expect(() => kit.setProvider('unknown')).toThrow("Provider 'unknown' not found");
-  });
-
-  it('generate throws when no provider set', async () => {
-    await expect(kit.generate({ model: 'llama3', prompt: 'hi' })).rejects.toThrow(
-      'No provider set'
-    );
-  });
-
-  // ── generate (non-streaming) ────────────────────────────────────────────────
-
-  it('generate returns text via current provider', async () => {
-    (fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ response: 'hello world', done: true }),
-    });
-
-    kit.addProvider(new OllamaAdapter());
-    const result = await kit.generate({ model: 'llama3', prompt: 'hi' });
-    expect(result).toBe('hello world');
-  });
-
-  it('generate calls onComplete callback', async () => {
-    (fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ response: 'ok', done: true }),
-    });
-
-    const onComplete = jest.fn();
-    kit.addProvider(new OllamaAdapter());
-    await kit.generate({ model: 'llama3', prompt: 'hi' }, { onComplete });
-    expect(onComplete).toHaveBeenCalledTimes(1);
-  });
-
-  // ── generate (streaming) ────────────────────────────────────────────────────
-
-  it('generate streams chunks via onChunk', async () => {
-    const chunkData = JSON.stringify({ response: 'chunk1', done: false }) + '\n';
-    const encoded = new TextEncoder().encode(chunkData);
-    const mockReader = {
-      read: jest.fn()
-        .mockResolvedValueOnce({ done: false, value: encoded })
-        .mockResolvedValueOnce({ done: true, value: undefined }),
+describe('agentic-kit core', () => {
+  it('transforms cross-provider thinking and inserts orphaned tool results', () => {
+    const sourceModel = createFakeModel();
+    const targetModel: ModelDescriptor = {
+      ...sourceModel,
+      provider: 'other',
+      api: 'other-api',
+      id: 'other-model',
     };
-    (fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      body: { getReader: () => mockReader },
-    });
 
-    kit.addProvider(new OllamaAdapter());
+    const messages = transformMessages(
+      [
+        {
+          role: 'assistant',
+          api: sourceModel.api,
+          provider: sourceModel.provider,
+          model: sourceModel.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: 'toolUse',
+          timestamp: Date.now(),
+          content: [
+            { type: 'thinking', thinking: 'private chain' },
+            { type: 'toolCall', id: 'call|1', name: 'lookup', arguments: { city: 'Paris' } },
+          ],
+        },
+        { role: 'user', content: 'continue', timestamp: Date.now() },
+      ],
+      targetModel
+    );
+
+    expect(messages[0]).toMatchObject({
+      role: 'assistant',
+      content: [
+        { type: 'text', text: '<thinking>private chain</thinking>' },
+        { type: 'toolCall', id: 'call|1', name: 'lookup' },
+      ],
+    });
+    expect(messages[1]).toMatchObject({
+      role: 'toolResult',
+      toolCallId: 'call|1',
+      isError: true,
+    });
+  });
+
+  it('keeps the legacy AgentKit generate API working through structured streams', async () => {
+    const provider: ProviderAdapter & { name: string } = {
+      api: 'fake-api',
+      provider: 'fake',
+      name: 'fake',
+      createModel: () => createFakeModel(),
+      stream: () => {
+        const stream = createAssistantMessageEventStream();
+        const message = {
+          role: 'assistant' as const,
+          api: 'fake-api',
+          provider: 'fake',
+          model: 'demo',
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: 'stop' as const,
+          timestamp: Date.now(),
+          content: [{ type: 'text' as const, text: 'hello world' }],
+        };
+
+        queueMicrotask(() => {
+          stream.push({ type: 'start', partial: { ...message, content: [{ type: 'text', text: '' }] } });
+          stream.push({
+            type: 'text_start',
+            contentIndex: 0,
+            partial: { ...message, content: [{ type: 'text', text: '' }] },
+          });
+          stream.push({
+            type: 'text_delta',
+            contentIndex: 0,
+            delta: 'hello world',
+            partial: message,
+          });
+          stream.push({
+            type: 'text_end',
+            contentIndex: 0,
+            content: 'hello world',
+            partial: message,
+          });
+          stream.push({ type: 'done', reason: 'stop', message });
+          stream.end(message);
+        });
+
+        return stream;
+      },
+    };
+
+    const kit = new AgentKit().addProvider(provider);
     const chunks: string[] = [];
     await kit.generate(
-      { model: 'llama3', prompt: 'hi', stream: true },
-      { onChunk: (c) => chunks.push(c) }
+      { model: 'demo', prompt: 'hi', stream: true },
+      { onChunk: (chunk) => chunks.push(chunk) }
     );
-    expect(chunks).toEqual(['chunk1']);
-  });
 
-  it('generate calls onError and rethrows on failure', async () => {
-    (fetch as jest.Mock).mockRejectedValueOnce(new Error('network error'));
-
-    const onError = jest.fn();
-    kit.addProvider(new OllamaAdapter());
-    await expect(
-      kit.generate({ model: 'llama3', prompt: 'hi' }, { onError })
-    ).rejects.toThrow('network error');
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
-  });
-
-  // ── listModels ──────────────────────────────────────────────────────────────
-
-  it('listModels delegates to current provider', async () => {
-    (fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ models: [{ name: 'llama3' }, { name: 'mistral' }] }),
-    });
-
-    kit.addProvider(new OllamaAdapter());
-    const models = await kit.listModels();
-    expect(models).toEqual(['llama3', 'mistral']);
-  });
-
-  it('listModels returns empty array when no provider set', async () => {
-    const models = await kit.listModels();
-    expect(models).toEqual([]);
+    expect(chunks).toEqual(['hello world']);
+    await expect(kit.generate({ model: 'demo', prompt: 'hi' })).resolves.toBe('hello world');
   });
 });

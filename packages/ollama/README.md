@@ -12,7 +12,9 @@
    <a href="https://www.npmjs.com/package/@agentic-kit/ollama"><img height="20" src="https://img.shields.io/github/package-json/v/constructive-io/agentic-kit?filename=packages%2Follama%2Fpackage.json"/></a>
 </p>
 
-A JavaScript/TypeScript client for the Ollama LLM server, supporting model listing, text generation, streaming responses, embeddings, and model management.
+A JavaScript/TypeScript client and provider adapter for the Ollama API,
+supporting model listing, structured streaming text generation, embeddings, and
+model management.
 
 ## Installation
 
@@ -52,13 +54,6 @@ await client.pullModel('mistral');
 const embedding = await client.generateEmbedding('Compute embeddings');
 console.log('Embedding vector length:', embedding.length);
 
-// Generate a conversational response with context
-const response = await client.generateResponse(
-  'What is the capital of France?',
-  'Geography trivia'
-);
-console.log(response);
-
 // Delete a pulled model when done
 await client.deleteModel('mistral');
 ```
@@ -68,11 +63,18 @@ await client.deleteModel('mistral');
 - `new OllamaClient(baseUrl?: string)` – defaults to `http://localhost:11434`
 - `.listModels(): Promise<string[]>`
 - `.generate(input: GenerateInput, onChunk?: (chunk: string) => void): Promise<string | void>`
-- `.generateStreamingResponse(prompt: string, onChunk: (chunk: string) => void, context?: string): Promise<void>`
 - `.generateEmbedding(text: string): Promise<number[]>`
-- `.generateResponse(prompt: string, context?: string): Promise<string>`
 - `.pullModel(model: string): Promise<void>`
 - `.deleteModel(model: string): Promise<void>`
+
+## Provider Adapter
+
+```typescript
+import { OllamaAdapter } from '@agentic-kit/ollama';
+
+const provider = new OllamaAdapter('http://localhost:11434');
+const model = provider.createModel('llama3');
+```
 
 ## GenerateInput type
 

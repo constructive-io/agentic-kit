@@ -12,7 +12,14 @@
    <a href="https://www.npmjs.com/package/agentic-kit"><img height="20" src="https://img.shields.io/github/package-json/v/constructive-io/agentic-kit?filename=packages%2Fagentic-kit%2Fpackage.json"/></a>
 </p>
 
-A unified, streaming-capable interface for multiple LLM providers. Plug in any supported adapter and swap between them at runtime.
+A low-level provider portability layer for LLM applications. `agentic-kit`
+provides:
+
+- provider-independent `ModelDescriptor` and `Context` types
+- structured streaming events for text, reasoning, and tool calls
+- model and provider registries
+- cross-provider message normalization for replay and handoff
+- a one-release compatibility wrapper for the legacy `AgentKit.generate()` API
 
 ## Installation
 
@@ -23,55 +30,60 @@ npm install agentic-kit
 
 ## Quick Start
 
+### Structured API
+
 ```typescript
-import { createOllamaKit, createMultiProviderKit, OllamaAdapter, AgentKit } from 'agentic-kit';
+import { complete, getModel } from 'agentic-kit';
 
-// Ollama
-const kit = createOllamaKit('http://localhost:11434');
-const text = await kit.generate({ model: 'mistral', prompt: 'Hello' });
+const model = getModel('openai', 'gpt-4o-mini');
+const message = await complete(model!, {
+  messages: [{ role: 'user', content: 'Hello', timestamp: Date.now() }],
+});
 
-// Multi-provider with fallback
-const multi = createMultiProviderKit();
-multi.addProvider(new OllamaAdapter('http://localhost:11434'));
-const reply = await multi.generate({ model: 'mistral', prompt: 'Hello' });
+console.log(message.content);
 ```
 
-## Streaming
+### Streaming
 
 ```typescript
-await kit.generate(
-  { model: 'mistral', prompt: 'Hello', stream: true },
-  { onChunk: (chunk) => process.stdout.write(chunk) }
-);
+import { stream, getModel } from 'agentic-kit';
+
+const model = getModel('openai', 'gpt-4o-mini');
+const result = stream(model!, {
+  messages: [{ role: 'user', content: 'Explain tool calling briefly.', timestamp: Date.now() }],
+});
+
+for await (const event of result) {
+  if (event.type === 'text_delta') {
+    process.stdout.write(event.delta);
+  }
+}
 ```
 
 ## API Reference
 
-### `AgentKit`
+### Core API
 
-- `.generate(input: GenerateInput, options?: StreamingOptions): Promise<string | void>`
-- `.addProvider(provider: AgentProvider): void`
-- `.setProvider(name: string): void`
-- `.listProviders(): string[]`
-- `.getCurrentProvider(): AgentProvider | undefined`
+- `stream(model: ModelDescriptor, context: Context, options?: StreamOptions)`
+- `complete(model: ModelDescriptor, context: Context, options?: StreamOptions)`
+- `completeText(model: ModelDescriptor, context: Context, options?: StreamOptions)`
+- `registerModel(model: ModelDescriptor): void`
+- `registerProvider(provider: ProviderAdapter): void`
+- `getModel(provider: string, modelId: string): ModelDescriptor | undefined`
+- `getModels(provider?: string): ModelDescriptor[]`
 
-### `GenerateInput`
+### Legacy Compatibility API
+
+`AgentKit` is still available for one transition release:
 
 ```ts
 interface GenerateInput {
   model: string;
-  prompt: string;
+  prompt?: string;
+  messages?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
   stream?: boolean;
 }
 ```
 
-### `StreamingOptions`
-
-```ts
-interface StreamingOptions {
-  onChunk?: (chunk: string) => void;
-  onStateChange?: (state: string) => void;
-  onError?: (error: Error) => void;
-  onComplete?: () => void;
-}
-```
+Use `createOpenAIKit`, `createAnthropicKit`, `createOllamaKit`, or
+`createMultiProviderKit()` if you still need the old prompt-only entrypoint.
