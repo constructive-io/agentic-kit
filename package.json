@@ -18,6 +18,9 @@
     "clean": "pnpm -r run clean",
     "build": "pnpm -r run build",
     "build:dev": "pnpm -r run build:dev",
+    "test": "pnpm -r run test",
+    "test:live:ollama": "pnpm --filter @agentic-kit/ollama run test:live:smoke",
+    "test:live:ollama:extended": "pnpm --filter @agentic-kit/ollama run test:live:extended",
     "lint": "pnpm -r run lint",
     "internal:deps": "makage update-workspace",
     "deps": "pnpm up -r -i -L"

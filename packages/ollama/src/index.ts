@@ -232,7 +232,10 @@ interface OllamaTagsResponse {
 
 interface OllamaChatLine {
   done?: boolean;
-  message?: { role?: string; content?: string };
+  done_reason?: 'stop' | 'length';
+  message?: { role?: string; content?: string; thinking?: string };
+  prompt_eval_count?: number;
+  eval_count?: number;
   response?: string;
 }
 
@@ -395,22 +398,91 @@ export class OllamaAdapter {
 
         stream.push({ type: 'start', partial: clone(output) });
 
-        const reader = response.body?.getReader();
-        if (!reader) {
+        if (!response.body) {
           throw new Error('No response body');
         }
-
         const decoder = new TextDecoder();
         let buffer = '';
         let textIndex: number | undefined;
+        let thinkingIndex: number | undefined;
+        let finished = false;
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
+        const processPayload = (payload: OllamaChatLine): boolean => {
+          const thinking = payload.message?.thinking ?? '';
+          if (thinking) {
+            if (thinkingIndex === undefined) {
+              thinkingIndex = output.content.push({ type: 'thinking', thinking: '' }) - 1;
+              stream.push({
+                type: 'thinking_start',
+                contentIndex: thinkingIndex,
+                partial: clone(output),
+              });
+            }
+
+            const block = output.content[thinkingIndex] as ThinkingContent;
+            block.thinking += thinking;
+            stream.push({
+              type: 'thinking_delta',
+              contentIndex: thinkingIndex,
+              delta: thinking,
+              partial: clone(output),
+            });
           }
 
-          buffer += decoder.decode(value, { stream: true });
+          const text = payload.message?.content ?? payload.response ?? '';
+          if (text) {
+            if (textIndex === undefined) {
+              textIndex = output.content.push({ type: 'text', text: '' }) - 1;
+              stream.push({ type: 'text_start', contentIndex: textIndex, partial: clone(output) });
+            }
+
+            const block = output.content[textIndex] as TextContent;
+            block.text += text;
+            stream.push({
+              type: 'text_delta',
+              contentIndex: textIndex,
+              delta: text,
+              partial: clone(output),
+            });
+          }
+
+          if (!payload.done) {
+            return false;
+          }
+
+          output.usage.input = payload.prompt_eval_count ?? output.usage.input;
+          output.usage.output = payload.eval_count ?? output.usage.output;
+          output.usage.totalTokens = output.usage.input + output.usage.output;
+          output.stopReason = payload.done_reason === 'length' ? 'length' : 'stop';
+
+          if (thinkingIndex !== undefined) {
+            stream.push({
+              type: 'thinking_end',
+              contentIndex: thinkingIndex,
+              content: (output.content[thinkingIndex] as ThinkingContent).thinking,
+              partial: clone(output),
+            });
+          }
+          if (textIndex !== undefined) {
+            stream.push({
+              type: 'text_end',
+              contentIndex: textIndex,
+              content: (output.content[textIndex] as TextContent).text,
+              partial: clone(output),
+            });
+          }
+          stream.push({
+            type: 'done',
+            reason: output.stopReason === 'length' ? 'length' : 'stop',
+            message: clone(output),
+          });
+          stream.end(output);
+          finished = true;
+          return true;
+        };
+
+        for await (const chunk of iterateResponseBody(response.body)) {
+          buffer += decoder.decode(chunk, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop() ?? '';
 
@@ -421,39 +493,28 @@ export class OllamaAdapter {
             }
 
             const payload = JSON.parse(trimmed) as OllamaChatLine;
-            const text = payload.message?.content ?? payload.response ?? '';
-            if (text) {
-              if (textIndex === undefined) {
-                textIndex = output.content.push({ type: 'text', text: '' }) - 1;
-                stream.push({ type: 'text_start', contentIndex: textIndex, partial: clone(output) });
-              }
-
-              const block = output.content[textIndex] as TextContent;
-              block.text += text;
-              stream.push({
-                type: 'text_delta',
-                contentIndex: textIndex,
-                delta: text,
-                partial: clone(output),
-              });
-            }
-
-            if (payload.done) {
-              if (textIndex !== undefined) {
-                stream.push({
-                  type: 'text_end',
-                  contentIndex: textIndex,
-                  content: (output.content[textIndex] as TextContent).text,
-                  partial: clone(output),
-                });
-              }
-              stream.push({ type: 'done', reason: 'stop', message: clone(output) });
-              stream.end(output);
+            if (processPayload(payload)) {
               return;
             }
           }
         }
 
+        const trailing = buffer.trim();
+        if (!finished && trailing) {
+          const payload = JSON.parse(trailing) as OllamaChatLine;
+          if (processPayload(payload)) {
+            return;
+          }
+        }
+
+        if (thinkingIndex !== undefined) {
+          stream.push({
+            type: 'thinking_end',
+            contentIndex: thinkingIndex,
+            content: (output.content[thinkingIndex] as ThinkingContent).thinking,
+            partial: clone(output),
+          });
+        }
         if (textIndex !== undefined) {
           stream.push({
             type: 'text_end',
@@ -462,7 +523,11 @@ export class OllamaAdapter {
             partial: clone(output),
           });
         }
-        stream.push({ type: 'done', reason: 'stop', message: clone(output) });
+        stream.push({
+          type: 'done',
+          reason: output.stopReason === 'length' ? 'length' : 'stop',
+          message: clone(output),
+        });
         stream.end(output);
       } catch (error) {
         output.stopReason = options?.signal?.aborted ? 'aborted' : 'error';
@@ -595,6 +660,33 @@ function legacyInputToContext(input: GenerateInput): Context {
 
 function clone<TValue>(value: TValue): TValue {
   return JSON.parse(JSON.stringify(value)) as TValue;
+}
+
+async function* iterateResponseBody(
+  body: NonNullable<Response['body']>
+): AsyncGenerator<Uint8Array, void, void> {
+  if ('getReader' in body && typeof body.getReader === 'function') {
+    const reader = body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return;
+      }
+
+      if (value) {
+        yield value;
+      }
+    }
+  }
+
+  for await (const chunk of body as AsyncIterable<Uint8Array | Buffer | string>) {
+    if (typeof chunk === 'string') {
+      yield new TextEncoder().encode(chunk);
+      continue;
+    }
+
+    yield chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+  }
 }
 
 export default OllamaClient;

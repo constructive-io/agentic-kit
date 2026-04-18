@@ -27,19 +27,19 @@ cross-provider message normalization, and an optional stateful agent runtime.
 ```bash
 git clone git@github.com:constructive-io/agentic-kit.git
 cd agentic-kit
-yarn install
-yarn build
-yarn test
+pnpm install
+pnpm build
+pnpm test
 ```
 
 ## Usage
 
 ```typescript
-import { complete, getModel } from 'agentic-kit';
+import { complete, getModel } from "agentic-kit";
 
-const model = getModel('openai', 'gpt-4o-mini');
+const model = getModel("openai", "gpt-4o-mini");
 const message = await complete(model!, {
-  messages: [{ role: 'user', content: 'Hello', timestamp: Date.now() }],
+  messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
 });
 
 console.log(message.content);
@@ -48,3 +48,29 @@ console.log(message.content);
 ## Contributing
 
 See individual package READMEs for docs and local dev instructions.
+
+## Testing
+
+Default tests stay deterministic and local:
+
+```bash
+pnpm test
+```
+
+There is also a local-only Ollama live lane that does not hit hosted
+providers. The default root command runs the fast smoke tier:
+
+```bash
+OLLAMA_LIVE_MODEL=qwen3.5:4b pnpm test:live:ollama
+```
+
+Run the broader lane explicitly when you want slower behavioral coverage:
+
+```bash
+OLLAMA_LIVE_MODEL=qwen3.5:4b pnpm test:live:ollama:extended
+```
+
+The Ollama live script performs a preflight against `OLLAMA_BASE_URL` and exits
+cleanly if the local server or requested model is unavailable. If
+`nomic-embed-text:latest` is installed, the lane also exercises local embedding
+generation.

@@ -71,6 +71,85 @@ describe('agentic-kit core', () => {
     });
   });
 
+  it('drops aborted assistant turns and rewrites tool result ids for stricter providers', () => {
+    const sourceModel = createFakeModel();
+    const targetModel: ModelDescriptor = {
+      ...sourceModel,
+      provider: 'anthropic',
+      api: 'anthropic-messages',
+      id: 'claude-demo',
+    };
+
+    const transformed = transformMessages(
+      [
+        {
+          role: 'assistant',
+          api: sourceModel.api,
+          provider: sourceModel.provider,
+          model: sourceModel.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: 'toolUse',
+          timestamp: Date.now(),
+          content: [
+            { type: 'toolCall', id: 'call|needs-normalizing', name: 'lookup', arguments: { city: 'Paris' } },
+          ],
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'call|needs-normalizing',
+          toolName: 'lookup',
+          content: [{ type: 'text', text: 'ok' }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+        {
+          role: 'assistant',
+          api: sourceModel.api,
+          provider: sourceModel.provider,
+          model: sourceModel.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: 'aborted',
+          errorMessage: 'cancelled',
+          timestamp: Date.now(),
+          content: [{ type: 'text', text: 'partial' }],
+        },
+      ],
+      targetModel
+    );
+
+    expect(transformed).toHaveLength(2);
+    expect(transformed[0]).toMatchObject({
+      role: 'assistant',
+      content: [
+        {
+          type: 'toolCall',
+          id: 'call_needs-normalizing',
+          name: 'lookup',
+        },
+      ],
+    });
+    expect(transformed[1]).toMatchObject({
+      role: 'toolResult',
+      toolCallId: 'call_needs-normalizing',
+      toolName: 'lookup',
+      isError: false,
+    });
+  });
+
   it('keeps the legacy AgentKit generate API working through structured streams', async () => {
     const provider: ProviderAdapter & { name: string } = {
       api: 'fake-api',
@@ -133,5 +212,32 @@ describe('agentic-kit core', () => {
 
     expect(chunks).toEqual(['hello world']);
     await expect(kit.generate({ model: 'demo', prompt: 'hi' })).resolves.toBe('hello world');
+  });
+
+  it('extracts assistant text from mixed content blocks', () => {
+    const text = getMessageText({
+      role: 'assistant',
+      api: 'fake-api',
+      provider: 'fake',
+      model: 'demo',
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'stop',
+      timestamp: Date.now(),
+      content: [
+        { type: 'thinking', thinking: 'ignore me' },
+        { type: 'text', text: 'hello ' },
+        { type: 'toolCall', id: 'tool_1', name: 'lookup', arguments: { city: 'Paris' } },
+        { type: 'text', text: 'world' },
+      ],
+    });
+
+    expect(text).toBe('hello world');
   });
 });

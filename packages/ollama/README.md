@@ -76,6 +76,32 @@ const provider = new OllamaAdapter('http://localhost:11434');
 const model = provider.createModel('llama3');
 ```
 
+## Local Live Tests
+
+The package includes a local-only live lane that never talks to hosted
+providers.
+
+```bash
+OLLAMA_LIVE_MODEL=qwen3.5:4b pnpm --filter @agentic-kit/ollama test:live
+```
+
+That default command runs the fast smoke tier. Run the broader suite explicitly
+when you want slower behavioral coverage:
+
+```bash
+OLLAMA_LIVE_MODEL=qwen3.5:4b pnpm --filter @agentic-kit/ollama test:live:extended
+```
+
+Notes:
+
+- The preflight checks `OLLAMA_BASE_URL` first and defaults to `http://127.0.0.1:11434`.
+- The default live model is `qwen3.5:4b`; override `OLLAMA_LIVE_MODEL` only if you want a different local model.
+- If `nomic-embed-text:latest` is installed, the live lane also covers local embeddings. Override it with `OLLAMA_LIVE_EMBED_MODEL` if needed.
+- `smoke` covers fast adapter invariants; `extended` runs the smoke tier plus slower behavioral checks such as reasoning metadata, legacy generate, short multi-turn context, and embeddings.
+- If Ollama is not running, or the configured model is not installed, the live
+  script exits cleanly with a skip message.
+- Normal `pnpm test` runs do not include the live lane.
+
 ## GenerateInput type
 
 ```ts
