@@ -1,8 +1,8 @@
-import { AnthropicAdapter, ANTHROPIC_MODELS, type AnthropicOptions } from '@agentic-kit/anthropic';
-import { OllamaAdapter, OllamaClient, OLLAMA_MODELS } from '@agentic-kit/ollama';
+import { ANTHROPIC_MODELS, AnthropicAdapter, type AnthropicOptions } from '@agentic-kit/anthropic';
+import { OLLAMA_MODELS,OllamaAdapter, OllamaClient } from '@agentic-kit/ollama';
 import {
-  OpenAIAdapter,
   OPENAI_COMPATIBLE_MODELS,
+  OpenAIAdapter,
   type OpenAIOptions,
 } from '@agentic-kit/openai';
 
@@ -41,7 +41,7 @@ export * from './messages.js';
 export * from './transform-messages.js';
 export * from './types.js';
 
-export { EventStream, createAssistantMessageEventStream, OllamaClient };
+export { createAssistantMessageEventStream, EventStream, OllamaClient };
 export { AnthropicAdapter, OllamaAdapter, OpenAIAdapter };
 export type { AnthropicOptions, OpenAIOptions };
 
@@ -206,32 +206,32 @@ export {
 function legacyInputToContext(input: LegacyGenerateInput): Context {
   const messages: Context['messages'] = input.messages
     ? input.messages
-        .filter((message) => message.role !== 'system')
-        .map((message) =>
-          message.role === 'assistant'
-            ? {
-                role: 'assistant' as const,
-                api: 'legacy',
-                provider: 'legacy',
-                model: input.model,
-                content: [{ type: 'text' as const, text: message.content }],
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                },
-                stopReason: 'stop' as const,
-                timestamp: Date.now(),
-              }
-            : {
-                role: 'user' as const,
-                content: message.content,
-                timestamp: Date.now(),
-              }
-        )
+      .filter((message) => message.role !== 'system')
+      .map((message) =>
+        message.role === 'assistant'
+          ? {
+            role: 'assistant' as const,
+            api: 'legacy',
+            provider: 'legacy',
+            model: input.model,
+            content: [{ type: 'text' as const, text: message.content }],
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop' as const,
+            timestamp: Date.now(),
+          }
+          : {
+            role: 'user' as const,
+            content: message.content,
+            timestamp: Date.now(),
+          }
+      )
     : [{ role: 'user' as const, content: input.prompt ?? '', timestamp: Date.now() }];
 
   const systemPrompt =

@@ -95,22 +95,22 @@ function validateSchema(schema: JsonSchema, value: unknown, path: string): strin
 
 function matchesType(type: string, value: unknown): boolean {
   switch (type) {
-    case 'array':
-      return Array.isArray(value);
-    case 'boolean':
-      return typeof value === 'boolean';
-    case 'integer':
-      return typeof value === 'number' && Number.isInteger(value);
-    case 'null':
-      return value === null;
-    case 'number':
-      return typeof value === 'number';
-    case 'object':
-      return isPlainObject(value);
-    case 'string':
-      return typeof value === 'string';
-    default:
-      return true;
+  case 'array':
+    return Array.isArray(value);
+  case 'boolean':
+    return typeof value === 'boolean';
+  case 'integer':
+    return typeof value === 'number' && Number.isInteger(value);
+  case 'null':
+    return value === null;
+  case 'number':
+    return typeof value === 'number';
+  case 'object':
+    return isPlainObject(value);
+  case 'string':
+    return typeof value === 'string';
+  default:
+    return true;
   }
 }
 

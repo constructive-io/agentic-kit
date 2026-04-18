@@ -1,11 +1,10 @@
 import {
-  complete,
-  createToolResultMessage,
-  createUserMessage,
-  stream,
   type AssistantMessage,
   type Context,
+  createToolResultMessage,
+  createUserMessage,
   type Message,
+  stream,
   type StreamOptions,
 } from 'agentic-kit';
 
@@ -198,30 +197,30 @@ export class Agent {
 
     for await (const event of streamResult) {
       switch (event.type) {
-        case 'start':
-          this._state.streamMessage = event.partial;
-          this.emit({ type: 'message_start', message: event.partial });
-          break;
-        case 'text_start':
-        case 'text_delta':
-        case 'text_end':
-        case 'thinking_start':
-        case 'thinking_delta':
-        case 'thinking_end':
-        case 'toolcall_start':
-        case 'toolcall_delta':
-        case 'toolcall_end':
-          this._state.streamMessage = event.partial;
-          this.emit({
-            type: 'message_update',
-            message: event.partial,
-            assistantMessageEvent: event,
-          });
-          break;
-        case 'done':
-        case 'error':
-          this._state.streamMessage = null;
-          break;
+      case 'start':
+        this._state.streamMessage = event.partial;
+        this.emit({ type: 'message_start', message: event.partial });
+        break;
+      case 'text_start':
+      case 'text_delta':
+      case 'text_end':
+      case 'thinking_start':
+      case 'thinking_delta':
+      case 'thinking_end':
+      case 'toolcall_start':
+      case 'toolcall_delta':
+      case 'toolcall_end':
+        this._state.streamMessage = event.partial;
+        this.emit({
+          type: 'message_update',
+          message: event.partial,
+          assistantMessageEvent: event,
+        });
+        break;
+      case 'done':
+      case 'error':
+        this._state.streamMessage = null;
+        break;
       }
     }
 

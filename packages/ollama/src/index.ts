@@ -624,32 +624,32 @@ function createAssistantMessage(model: ModelDescriptor): AssistantMessage {
 function legacyInputToContext(input: GenerateInput): Context {
   const messages: Message[] = input.messages
     ? input.messages
-        .filter((message) => message.role !== 'system')
-        .map((message) =>
-          message.role === 'assistant'
-            ? {
-                role: 'assistant' as const,
-                api: 'ollama-native',
-                provider: 'ollama',
-                model: input.model,
-                content: [{ type: 'text', text: message.content }],
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                },
-                stopReason: 'stop' as const,
-                timestamp: Date.now(),
-              }
-            : {
-                role: 'user' as const,
-                content: message.content,
-                timestamp: Date.now(),
-              }
-        )
+      .filter((message) => message.role !== 'system')
+      .map((message) =>
+        message.role === 'assistant'
+          ? {
+            role: 'assistant' as const,
+            api: 'ollama-native',
+            provider: 'ollama',
+            model: input.model,
+            content: [{ type: 'text', text: message.content }],
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop' as const,
+            timestamp: Date.now(),
+          }
+          : {
+            role: 'user' as const,
+            content: message.content,
+            timestamp: Date.now(),
+          }
+      )
     : [{ role: 'user' as const, content: input.prompt ?? '', timestamp: Date.now() }];
 
   return {
@@ -679,7 +679,7 @@ async function* iterateResponseBody(
     }
   }
 
-  for await (const chunk of body as AsyncIterable<Uint8Array | Buffer | string>) {
+  for await (const chunk of body as unknown as AsyncIterable<Uint8Array | Buffer | string>) {
     if (typeof chunk === 'string') {
       yield new TextEncoder().encode(chunk);
       continue;

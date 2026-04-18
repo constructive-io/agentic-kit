@@ -686,17 +686,17 @@ function toAnthropicMessage(message: Message): Record<string, unknown> {
         typeof message.content === 'string'
           ? [{ type: 'text', text: message.content }]
           : message.content.map((block) =>
-              block.type === 'text'
-                ? { type: 'text', text: block.text }
-                : {
-                    type: 'image',
-                    source: {
-                      type: 'base64',
-                      media_type: block.mimeType,
-                      data: block.data,
-                    },
-                  }
-            ),
+            block.type === 'text'
+              ? { type: 'text', text: block.text }
+              : {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: block.mimeType,
+                  data: block.data,
+                },
+              }
+          ),
     };
   }
 
@@ -739,16 +739,16 @@ function toAnthropicMessage(message: Message): Record<string, unknown> {
 
 function clampThinkingBudget(reasoning: NonNullable<StreamOptions['reasoning']>): number {
   switch (reasoning) {
-    case 'minimal':
-      return 256;
-    case 'low':
-      return 1024;
-    case 'medium':
-      return 4096;
-    case 'high':
-      return 8192;
-    case 'xhigh':
-      return 16384;
+  case 'minimal':
+    return 256;
+  case 'low':
+    return 1024;
+  case 'medium':
+    return 4096;
+  case 'high':
+    return 8192;
+  case 'xhigh':
+    return 16384;
   }
 }
 

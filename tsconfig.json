@@ -10,8 +10,9 @@
     "sourceMap": false,
     "declaration": true,
     "resolveJsonModule": true,
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
+    "types": ["node"],
     "typeRoots": ["./types", "./node_modules/@types"]
   },
-  "exclude": ["dist", "node_modules"]
+  "exclude": ["node_modules", "**/dist", "packages/*/__tests__"]
 }

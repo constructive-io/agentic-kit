@@ -39,7 +39,7 @@ describe('OllamaAdapter', () => {
       createLineResponse([
         JSON.stringify({ message: { content: 'Hello' }, done: false }),
         JSON.stringify({ done: true }),
-      ])
+      ]),
     );
 
     const adapter = new OllamaAdapter('http://localhost:11434');
@@ -54,7 +54,9 @@ describe('OllamaAdapter', () => {
     }
 
     const message = await stream.result();
-    expect(eventTypes).toEqual(expect.arrayContaining(['text_start', 'text_delta', 'text_end', 'done']));
+    expect(eventTypes).toEqual(
+      expect.arrayContaining(['text_start', 'text_delta', 'text_end', 'done']),
+    );
     expect(message.content).toEqual([{ type: 'text', text: 'Hello' }]);
   });
 
@@ -64,7 +66,7 @@ describe('OllamaAdapter', () => {
         JSON.stringify({ message: { thinking: 'reasoning', content: '' }, done: false }),
         JSON.stringify({ message: { content: 'Hello from node stream' }, done: false }),
         JSON.stringify({ done: true, done_reason: 'stop', prompt_eval_count: 12, eval_count: 4 }),
-      ])
+      ]),
     );
 
     const adapter = new OllamaAdapter('http://localhost:11434');
@@ -92,7 +94,7 @@ describe('OllamaAdapter', () => {
       createLineResponse([
         JSON.stringify({ message: { content: 'partial' }, done: false }),
         JSON.stringify({ done: true, done_reason: 'length', prompt_eval_count: 9, eval_count: 2 }),
-      ])
+      ]),
     );
 
     const adapter = new OllamaAdapter('http://localhost:11434');
@@ -110,13 +112,17 @@ describe('OllamaAdapter', () => {
     }
 
     const message = await stream.result();
-    expect(eventTypes).toEqual(expect.arrayContaining(['text_start', 'text_delta', 'text_end', 'done']));
+    expect(eventTypes).toEqual(
+      expect.arrayContaining(['text_start', 'text_delta', 'text_end', 'done']),
+    );
     expect(message.stopReason).toBe('length');
     expect(message.usage.totalTokens).toBe(11);
   });
 
   it('serializes system prompts, assistant state, and tool results into Ollama chat messages', async () => {
-    (fetch as jest.Mock).mockResolvedValueOnce(createLineResponse([JSON.stringify({ done: true })]));
+    (fetch as jest.Mock).mockResolvedValueOnce(
+      createLineResponse([JSON.stringify({ done: true })]),
+    );
 
     const adapter = new OllamaAdapter('http://127.0.0.1:11434');
     const model = adapter.createModel('llama3');
@@ -172,7 +178,8 @@ describe('OllamaAdapter', () => {
       { role: 'user', content: 'look at this image', images: ['aGVsbG8='] },
       {
         role: 'assistant',
-        content: '<thinking>reason quietly</thinking>\n<tool-call name="lookup">{"city":"Paris"}</tool-call>',
+        content:
+          '<thinking>reason quietly</thinking>\n<tool-call name="lookup">{"city":"Paris"}</tool-call>',
       },
       { role: 'user', content: 'Paris data' },
     ]);
@@ -190,7 +197,7 @@ describe('OllamaAdapter', () => {
       {
         messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }],
       },
-      { signal: controller.signal }
+      { signal: controller.signal },
     );
 
     const eventTypes: string[] = [];

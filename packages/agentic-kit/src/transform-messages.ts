@@ -1,5 +1,4 @@
 import type {
-  AssistantMessage,
   Message,
   ModelDescriptor,
   TextContent,

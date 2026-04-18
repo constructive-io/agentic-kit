@@ -1,7 +1,6 @@
 import type {
   AssistantMessage,
   Context,
-  CostSchedule,
   ImageContent,
   Message,
   ModelDescriptor,
@@ -12,7 +11,7 @@ import type {
   UserMessage,
 } from './types.js';
 
-export function createEmptyUsage(cost?: CostSchedule): Usage {
+export function createEmptyUsage(): Usage {
   return {
     input: 0,
     output: 0,
@@ -47,7 +46,7 @@ export function createAssistantMessage(model: ModelDescriptor): AssistantMessage
     provider: model.provider,
     model: model.id,
     content: [],
-    usage: createEmptyUsage(model.cost),
+    usage: createEmptyUsage(),
     stopReason: 'stop',
     timestamp: Date.now(),
   };

@@ -2,9 +2,9 @@ import {
   AgentKit,
   createAssistantMessageEventStream,
   getMessageText,
-  transformMessages,
   type ModelDescriptor,
   type ProviderAdapter,
+  transformMessages,
 } from '../src';
 
 function createFakeModel(): ModelDescriptor {

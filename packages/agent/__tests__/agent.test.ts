@@ -1,7 +1,7 @@
 import {
-  createAssistantMessageEventStream,
   type AssistantMessage,
   type Context,
+  createAssistantMessageEventStream,
   type ModelDescriptor,
 } from 'agentic-kit';
 

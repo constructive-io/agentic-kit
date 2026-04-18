@@ -679,11 +679,11 @@ function buildRequestBody(
   const messages = [
     ...(context.systemPrompt
       ? [
-          {
-            role: 'system',
-            content: context.systemPrompt,
-          },
-        ]
+        {
+          role: 'system',
+          content: context.systemPrompt,
+        },
+      ]
       : []),
     ...context.messages.map((message) => toOpenAIMessage(message, compat)),
   ];
@@ -733,15 +733,15 @@ function toOpenAIMessage(
         typeof message.content === 'string'
           ? message.content
           : message.content.map((block) =>
-              block.type === 'text'
-                ? { type: 'text', text: block.text }
-                : {
-                    type: 'image_url',
-                    image_url: {
-                      url: `data:${block.mimeType};base64,${block.data}`,
-                    },
-                  }
-            ),
+            block.type === 'text'
+              ? { type: 'text', text: block.text }
+              : {
+                type: 'image_url',
+                image_url: {
+                  url: `data:${block.mimeType};base64,${block.data}`,
+                },
+              }
+          ),
     };
   }
 
