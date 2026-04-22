@@ -20,7 +20,13 @@ const sharedRules = {
 
 module.exports = [
   {
-    ignores: ['**/dist/**', '**/node_modules/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/.tanstack/**',
+      '**/.output/**',
+      '**/routeTree.gen.ts',
+    ],
   },
   {
     ...js.configs.recommended,
