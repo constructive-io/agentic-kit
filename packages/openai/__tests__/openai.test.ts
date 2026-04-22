@@ -35,7 +35,7 @@ describe('OpenAIAdapter', () => {
     );
 
     const adapter = new OpenAIAdapter({ apiKey: 'test-key' });
-    const model = adapter.createModel('gpt-4o-mini');
+    const model = adapter.createModel('gpt-5.4-mini');
     const stream = adapter.stream(model, {
       messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }],
       tools: [
@@ -79,8 +79,9 @@ describe('OpenAIAdapter', () => {
 
     expect(models).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: 'gpt-4o-mini' }),
-        expect.objectContaining({ id: 'gpt-4o' }),
+        expect.objectContaining({ id: 'gpt-5.4' }),
+        expect.objectContaining({ id: 'gpt-5.4-mini' }),
+        expect.objectContaining({ id: 'gpt-5.4-nano' }),
       ])
     );
   });

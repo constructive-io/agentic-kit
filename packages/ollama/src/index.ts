@@ -258,6 +258,16 @@ export class OllamaClient {
     return payload.models?.map((model) => model.name) ?? [];
   }
 
+  async showModel(model: string): Promise<{ capabilities?: string[] } | null> {
+    const response = await fetch(`${this.baseUrl}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as { capabilities?: string[] };
+  }
+
   async pullModel(model: string): Promise<void> {
     const response = await fetch(`${this.baseUrl}/api/pull`, {
       method: 'POST',
@@ -373,7 +383,7 @@ export class OllamaAdapter {
     const output = createAssistantMessage(model);
 
     void (async () => {
-      const body = {
+      const body: Record<string, unknown> = {
         model: model.id,
         stream: true,
         messages: toOllamaMessages(context),
@@ -382,6 +392,7 @@ export class OllamaAdapter {
           num_predict: options?.maxTokens,
         },
       };
+      if (model.reasoning) body.think = true;
 
       try {
         const response = await fetch(`${model.baseUrl}/api/chat`, {
