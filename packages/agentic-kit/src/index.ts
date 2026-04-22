@@ -1,103 +1,179 @@
-import OllamaClient, { ChatMessage, GenerateInput } from '@agentic-kit/ollama';
-import { AnthropicAdapter, type AnthropicOptions } from '@agentic-kit/anthropic';
-import { OpenAIAdapter, type OpenAIOptions } from '@agentic-kit/openai';
+import { ANTHROPIC_MODELS, AnthropicAdapter, type AnthropicOptions } from '@agentic-kit/anthropic';
+import { OLLAMA_MODELS,OllamaAdapter, OllamaClient } from '@agentic-kit/ollama';
+import {
+  OPENAI_COMPATIBLE_MODELS,
+  OpenAIAdapter,
+  type OpenAIOptions,
+} from '@agentic-kit/openai';
 
-export type { ChatMessage, GenerateInput };
-export { OllamaClient };
-export { AnthropicAdapter, type AnthropicOptions };
-export { OpenAIAdapter, type OpenAIOptions };
+import { createAssistantMessageEventStream, EventStream } from './event-stream.js';
+import { getMessageText, normalizeContext } from './messages.js';
+import {
+  clearModels,
+  getModel,
+  getModels,
+  getProviders as getModelProviders,
+  registerModel,
+  registerModels,
+} from './model-registry.js';
+import {
+  clearProviders,
+  getProvider as getRegisteredProvider,
+  getProviders as getRegisteredProviders,
+  registerProvider,
+  unregisterProviders,
+} from './provider-registry.js';
+import { transformMessages } from './transform-messages.js';
+import type {
+  AssistantMessage,
+  AssistantMessageEventStream,
+  Context,
+  LegacyChatMessage,
+  LegacyGenerateInput,
+  LegacyStreamingOptions,
+  ModelDescriptor,
+  ProviderAdapter,
+  StreamOptions,
+} from './types.js';
 
-// ─── Interfaces ───────────────────────────────────────────────────────────────
+export * from './event-stream.js';
+export * from './messages.js';
+export * from './transform-messages.js';
+export * from './types.js';
 
-export interface StreamingOptions {
-  onChunk?: (chunk: string) => void;
-  onStateChange?: (state: string) => void;
-  onError?: (error: Error) => void;
-  onComplete?: () => void;
+export { createAssistantMessageEventStream, EventStream, OllamaClient };
+export { AnthropicAdapter, OllamaAdapter, OpenAIAdapter };
+export type { AnthropicOptions, OpenAIOptions };
+
+export type ChatMessage = LegacyChatMessage;
+export type GenerateInput = LegacyGenerateInput;
+
+type NamedProviderAdapter = ProviderAdapter & { name?: string };
+
+registerModels([...OPENAI_COMPATIBLE_MODELS, ...ANTHROPIC_MODELS, ...OLLAMA_MODELS]);
+registerProvider(new OpenAIAdapter());
+registerProvider(new AnthropicAdapter({ apiKey: '' }));
+registerProvider(new OllamaAdapter());
+
+export function stream(
+  model: ModelDescriptor,
+  context: Context,
+  options?: StreamOptions
+): AssistantMessageEventStream {
+  const provider = getRegisteredProvider(model.api);
+  if (!provider) {
+    throw new Error(`No provider registered for api '${model.api}'`);
+  }
+
+  return streamWithProvider(provider, model, context, options);
 }
 
-export interface AgentProvider {
-  readonly name: string;
-  generate(input: GenerateInput): Promise<string>;
-  generateStreaming(input: GenerateInput, onChunk: (chunk: string) => void): Promise<void>;
-  listModels?(): Promise<string[]>;
+export async function complete(
+  model: ModelDescriptor,
+  context: Context,
+  options?: StreamOptions
+): Promise<AssistantMessage> {
+  const response = stream(model, context, options);
+  return response.result();
 }
 
-// ─── Ollama Adapter ───────────────────────────────────────────────────────────
-
-export class OllamaAdapter implements AgentProvider {
-  public readonly name = 'ollama';
-  private client: OllamaClient;
-
-  constructor(baseUrl?: string) {
-    this.client = new OllamaClient(baseUrl);
-  }
-
-  async generate(input: GenerateInput): Promise<string> {
-    return this.client.generate(input) as Promise<string>;
-  }
-
-  async generateStreaming(input: GenerateInput, onChunk: (chunk: string) => void): Promise<void> {
-    return this.client.generate(input, onChunk);
-  }
-
-  async listModels(): Promise<string[]> {
-    return this.client.listModels();
-  }
+export async function completeText(
+  model: ModelDescriptor,
+  context: Context,
+  options?: StreamOptions
+): Promise<string> {
+  const message = await complete(model, context, options);
+  return getMessageText(message);
 }
-
-// ─── AgentKit ─────────────────────────────────────────────────────────────────
 
 export class AgentKit {
-  private providers = new Map<string, AgentProvider>();
-  private current?: AgentProvider;
+  private readonly providers = new Map<string, NamedProviderAdapter>();
+  private current?: NamedProviderAdapter;
 
-  addProvider(provider: AgentProvider): this {
-    this.providers.set(provider.name, provider);
-    if (!this.current) this.current = provider;
+  addProvider(provider: NamedProviderAdapter): this {
+    this.providers.set(getProviderName(provider), provider);
+    if (!this.current) {
+      this.current = provider;
+    }
     return this;
   }
 
   setProvider(name: string): this {
     const provider = this.providers.get(name);
-    if (!provider) throw new Error(`Provider '${name}' not found`);
+    if (!provider) {
+      throw new Error(`Provider '${name}' not found`);
+    }
     this.current = provider;
     return this;
   }
 
-  getCurrentProvider(): AgentProvider | undefined { return this.current; }
-  listProviders(): string[] { return Array.from(this.providers.keys()); }
+  getCurrentProvider(): NamedProviderAdapter | undefined {
+    return this.current;
+  }
 
-  async generate(input: GenerateInput, options?: StreamingOptions): Promise<string | void> {
-    if (!this.current) throw new Error('No provider set. Call addProvider() first.');
+  listProviders(): string[] {
+    return Array.from(this.providers.keys());
+  }
 
-    if (options?.onChunk) {
+  async generate(
+    input: LegacyGenerateInput,
+    options?: LegacyStreamingOptions
+  ): Promise<string | void> {
+    if (!this.current) {
+      throw new Error('No provider set. Call addProvider() first.');
+    }
+
+    const provider = this.current;
+    const model = createLegacyModel(provider, input.model, input.maxTokens);
+    const context = legacyInputToContext(input);
+    const streamOptions: StreamOptions = {
+      maxTokens: input.maxTokens,
+      temperature: input.temperature,
+    };
+
+    if (options?.onChunk || input.stream) {
+      options?.onStateChange?.('streaming');
+
       try {
-        await this.current.generateStreaming(input, options.onChunk);
-        options.onComplete?.();
-      } catch (err) {
-        options.onError?.(err as Error);
-        throw err;
+        const response = streamWithProvider(provider, model, context, streamOptions);
+        for await (const event of response) {
+          if (event.type === 'text_delta') {
+            options?.onChunk?.(event.delta);
+          }
+        }
+        assertLegacyGenerateSucceeded(await response.result());
+        options?.onComplete?.();
+      } catch (error) {
+        options?.onError?.(error as Error);
+        throw error;
       }
+
       return;
     }
 
     try {
-      const result = await this.current.generate(input);
+      const message = assertLegacyGenerateSucceeded(
+        await completeWithProvider(provider, model, context, streamOptions)
+      );
+      options?.onStateChange?.('complete');
+      const text = getMessageText(message);
       options?.onComplete?.();
-      return result;
-    } catch (err) {
-      options?.onError?.(err as Error);
-      throw err;
+      return text;
+    } catch (error) {
+      options?.onError?.(error as Error);
+      throw error;
     }
   }
 
   async listModels(): Promise<string[]> {
-    return this.current?.listModels?.() ?? [];
+    if (!this.current?.listModels) {
+      return [];
+    }
+
+    const models = await this.current.listModels();
+    return models.map((model) => (typeof model === 'string' ? model : model.id));
   }
 }
-
-// ─── Factory helpers ──────────────────────────────────────────────────────────
 
 export function createOllamaKit(baseUrl?: string): AgentKit {
   return new AgentKit().addProvider(new OllamaAdapter(baseUrl));
@@ -107,10 +183,128 @@ export function createAnthropicKit(options: AnthropicOptions | string): AgentKit
   return new AgentKit().addProvider(new AnthropicAdapter(options));
 }
 
-export function createOpenAIKit(options: OpenAIOptions | string): AgentKit {
+export function createOpenAIKit(options?: OpenAIOptions | string): AgentKit {
   return new AgentKit().addProvider(new OpenAIAdapter(options));
 }
 
 export function createMultiProviderKit(): AgentKit {
   return new AgentKit();
+}
+
+export {
+  clearModels,
+  clearProviders,
+  getModel,
+  getModelProviders,
+  getModels,
+  getRegisteredProvider as getProvider,
+  getRegisteredProviders,
+  registerModel,
+  registerModels,
+  registerProvider,
+  unregisterProviders,
+};
+
+function legacyInputToContext(input: LegacyGenerateInput): Context {
+  const messages: Context['messages'] = input.messages
+    ? input.messages
+      .filter((message) => message.role !== 'system')
+      .map((message) =>
+        message.role === 'assistant'
+          ? {
+            role: 'assistant' as const,
+            api: 'legacy',
+            provider: 'legacy',
+            model: input.model,
+            content: [{ type: 'text' as const, text: message.content }],
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop' as const,
+            timestamp: Date.now(),
+          }
+          : {
+            role: 'user' as const,
+            content: message.content,
+            timestamp: Date.now(),
+          }
+      )
+    : [{ role: 'user' as const, content: input.prompt ?? '', timestamp: Date.now() }];
+
+  const systemPrompt =
+    input.system ?? input.messages?.find((message) => message.role === 'system')?.content;
+
+  return {
+    systemPrompt,
+    messages,
+  };
+}
+
+function createLegacyModel(
+  provider: NamedProviderAdapter,
+  modelId: string,
+  maxTokens?: number
+): ModelDescriptor {
+  if (provider.createModel) {
+    return provider.createModel(modelId, {
+      maxOutputTokens: maxTokens,
+    });
+  }
+
+  return {
+    id: modelId,
+    name: modelId,
+    api: provider.api,
+    provider: getProviderName(provider),
+    baseUrl: '',
+    input: ['text'],
+    reasoning: false,
+    tools: true,
+    maxOutputTokens: maxTokens,
+  };
+}
+
+function streamWithProvider(
+  provider: ProviderAdapter,
+  model: ModelDescriptor,
+  context: Context,
+  options?: StreamOptions
+): AssistantMessageEventStream {
+  const normalized = normalizeContext(context);
+  const transformedContext: Context = {
+    ...normalized,
+    messages: transformMessages(normalized.messages, model),
+  };
+  return provider.stream(model, transformedContext, options);
+}
+
+async function completeWithProvider(
+  provider: ProviderAdapter,
+  model: ModelDescriptor,
+  context: Context,
+  options?: StreamOptions
+): Promise<AssistantMessage> {
+  const response = streamWithProvider(provider, model, context, options);
+  return response.result();
+}
+
+function getProviderName(provider: NamedProviderAdapter): string {
+  return provider.name ?? provider.provider;
+}
+
+function assertLegacyGenerateSucceeded(message: AssistantMessage): AssistantMessage {
+  if (message.stopReason === 'error' || message.stopReason === 'aborted') {
+    throw new Error(
+      message.errorMessage ??
+        (message.stopReason === 'aborted' ? 'Generation aborted.' : 'Generation failed.'),
+      { cause: message }
+    );
+  }
+
+  return message;
 }
