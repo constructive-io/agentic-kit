@@ -141,6 +141,7 @@ export class AgentKit {
             options?.onChunk?.(event.delta);
           }
         }
+        assertLegacyGenerateSucceeded(await response.result());
         options?.onComplete?.();
       } catch (error) {
         options?.onError?.(error as Error);
@@ -150,10 +151,11 @@ export class AgentKit {
       return;
     }
 
-    options?.onStateChange?.('complete');
-
     try {
-      const message = await completeWithProvider(provider, model, context, streamOptions);
+      const message = assertLegacyGenerateSucceeded(
+        await completeWithProvider(provider, model, context, streamOptions)
+      );
+      options?.onStateChange?.('complete');
       const text = getMessageText(message);
       options?.onComplete?.();
       return text;
@@ -293,4 +295,16 @@ async function completeWithProvider(
 
 function getProviderName(provider: NamedProviderAdapter): string {
   return provider.name ?? provider.provider;
+}
+
+function assertLegacyGenerateSucceeded(message: AssistantMessage): AssistantMessage {
+  if (message.stopReason === 'error' || message.stopReason === 'aborted') {
+    throw new Error(
+      message.errorMessage ??
+        (message.stopReason === 'aborted' ? 'Generation aborted.' : 'Generation failed.'),
+      { cause: message }
+    );
+  }
+
+  return message;
 }

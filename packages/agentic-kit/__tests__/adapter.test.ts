@@ -1,5 +1,6 @@
 import {
   AgentKit,
+  type AssistantMessage,
   createAssistantMessageEventStream,
   getMessageText,
   type ModelDescriptor,
@@ -17,6 +18,29 @@ function createFakeModel(): ModelDescriptor {
     input: ['text'],
     reasoning: false,
     tools: true,
+  };
+}
+
+function createAssistantMessage(
+  overrides: Partial<AssistantMessage> = {}
+): AssistantMessage {
+  return {
+    role: 'assistant',
+    api: 'fake-api',
+    provider: 'fake',
+    model: 'demo',
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'stop',
+    timestamp: Date.now(),
+    content: [{ type: 'text', text: 'hello world' }],
+    ...overrides,
   };
 }
 
@@ -150,6 +174,67 @@ describe('agentic-kit core', () => {
     });
   });
 
+  it('normalizes short mistral tool-call ids without hanging and keeps tool results aligned', () => {
+    const sourceModel = createFakeModel();
+    const targetModel: ModelDescriptor = {
+      ...sourceModel,
+      provider: 'mistral',
+      api: 'openai-compatible',
+      id: 'mistral-demo',
+      compat: {
+        toolCallIdFormat: 'mistral9',
+      },
+    };
+
+    const transformed = transformMessages(
+      [
+        {
+          ...createAssistantMessage({
+            api: sourceModel.api,
+            provider: sourceModel.provider,
+            model: sourceModel.id,
+            stopReason: 'toolUse',
+            content: [{ type: 'toolCall', id: '%', name: 'lookup', arguments: { city: 'Paris' } }],
+          }),
+        },
+        {
+          role: 'toolResult',
+          toolCallId: '%',
+          toolName: 'lookup',
+          content: [{ type: 'text', text: 'ok' }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+      ],
+      targetModel
+    );
+
+    expect(transformed).toHaveLength(2);
+    expect(transformed[0]?.role).toBe('assistant');
+    expect(transformed[1]).toMatchObject({
+      role: 'toolResult',
+      toolName: 'lookup',
+      isError: false,
+    });
+
+    const assistant = transformed[0];
+    if (!assistant || assistant.role !== 'assistant') {
+      throw new Error('Expected assistant message');
+    }
+
+    const toolCall = assistant.content[0];
+    if (!toolCall || toolCall.type !== 'toolCall') {
+      throw new Error('Expected tool call content');
+    }
+
+    expect(toolCall.id).toMatch(/^[A-Za-z0-9]{9}$/);
+    expect(toolCall.id).not.toContain('_');
+    expect(transformed[1]).toMatchObject({
+      role: 'toolResult',
+      toolCallId: toolCall.id,
+    });
+  });
+
   it('keeps the legacy AgentKit generate API working through structured streams', async () => {
     const provider: ProviderAdapter & { name: string } = {
       api: 'fake-api',
@@ -158,23 +243,7 @@ describe('agentic-kit core', () => {
       createModel: () => createFakeModel(),
       stream: () => {
         const stream = createAssistantMessageEventStream();
-        const message = {
-          role: 'assistant' as const,
-          api: 'fake-api',
-          provider: 'fake',
-          model: 'demo',
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: 'stop' as const,
-          timestamp: Date.now(),
-          content: [{ type: 'text' as const, text: 'hello world' }],
-        };
+        const message = createAssistantMessage();
 
         queueMicrotask(() => {
           stream.push({ type: 'start', partial: { ...message, content: [{ type: 'text', text: '' }] } });
@@ -212,6 +281,108 @@ describe('agentic-kit core', () => {
 
     expect(chunks).toEqual(['hello world']);
     await expect(kit.generate({ model: 'demo', prompt: 'hi' })).resolves.toBe('hello world');
+  });
+
+  it('rejects legacy generate when a provider returns a terminal error in non-stream mode', async () => {
+    const provider: ProviderAdapter & { name: string } = {
+      api: 'fake-api',
+      provider: 'fake',
+      name: 'fake',
+      createModel: () => createFakeModel(),
+      stream: () => {
+        const stream = createAssistantMessageEventStream();
+        const failure = createAssistantMessage({
+          stopReason: 'error',
+          errorMessage: 'provider failed',
+          content: [{ type: 'text', text: '' }],
+        });
+
+        queueMicrotask(() => {
+          stream.push({ type: 'error', reason: 'error', error: failure });
+          stream.end(failure);
+        });
+
+        return stream;
+      },
+    };
+
+    const kit = new AgentKit().addProvider(provider);
+    const onComplete = jest.fn();
+    const onError = jest.fn();
+    const onStateChange = jest.fn();
+
+    await expect(
+      kit.generate(
+        { model: 'demo', prompt: 'hi' },
+        { onComplete, onError, onStateChange }
+      )
+    ).rejects.toThrow('provider failed');
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onStateChange).not.toHaveBeenCalledWith('complete');
+  });
+
+  it('rejects legacy generate when a provider returns a terminal error in stream mode', async () => {
+    const provider: ProviderAdapter & { name: string } = {
+      api: 'fake-api',
+      provider: 'fake',
+      name: 'fake',
+      createModel: () => createFakeModel(),
+      stream: () => {
+        const stream = createAssistantMessageEventStream();
+        const partial = createAssistantMessage({
+          content: [{ type: 'text', text: 'partial' }],
+        });
+        const failure = createAssistantMessage({
+          stopReason: 'error',
+          errorMessage: 'provider failed',
+          content: [{ type: 'text', text: 'partial' }],
+        });
+
+        queueMicrotask(() => {
+          stream.push({ type: 'start', partial: { ...partial, content: [{ type: 'text', text: '' }] } });
+          stream.push({
+            type: 'text_start',
+            contentIndex: 0,
+            partial: { ...partial, content: [{ type: 'text', text: '' }] },
+          });
+          stream.push({
+            type: 'text_delta',
+            contentIndex: 0,
+            delta: 'partial',
+            partial,
+          });
+          stream.push({ type: 'error', reason: 'error', error: failure });
+          stream.end(failure);
+        });
+
+        return stream;
+      },
+    };
+
+    const kit = new AgentKit().addProvider(provider);
+    const chunks: string[] = [];
+    const onComplete = jest.fn();
+    const onError = jest.fn();
+    const onStateChange = jest.fn();
+
+    await expect(
+      kit.generate(
+        { model: 'demo', prompt: 'hi', stream: true },
+        {
+          onChunk: (chunk) => chunks.push(chunk),
+          onComplete,
+          onError,
+          onStateChange,
+        }
+      )
+    ).rejects.toThrow('provider failed');
+
+    expect(chunks).toEqual(['partial']);
+    expect(onStateChange).toHaveBeenCalledWith('streaming');
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 
   it('extracts assistant text from mixed content blocks', () => {

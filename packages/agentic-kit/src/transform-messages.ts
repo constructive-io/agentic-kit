@@ -141,7 +141,7 @@ function normalizeToolCallId(id: string, model: ModelDescriptor): string {
       return alphanumeric.slice(0, 9);
     }
 
-    return stableId(id, 9, /^[a-zA-Z0-9]+$/);
+    return stableAlphanumericId(id, 9);
   }
 
   const safe = id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
@@ -171,6 +171,20 @@ function stableId(input: string, length: number, pattern: RegExp): string {
     value = value.replace(/[^a-zA-Z0-9_-]/g, '_');
   }
 
+  if (value.length >= length) {
+    return value.slice(0, length);
+  }
+
+  return value.padEnd(length, '0');
+}
+
+function stableAlphanumericId(input: string, length: number): string {
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  }
+
+  const value = `tc${hash.toString(36)}`.replace(/[^a-zA-Z0-9]/g, '');
   if (value.length >= length) {
     return value.slice(0, length);
   }
