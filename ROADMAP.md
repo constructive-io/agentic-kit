@@ -6,13 +6,13 @@ This describes what will exist next, why, and what is explicitly out of scope.
 
 ## Current State (snapshot)
 
-| Package | Status |
-|---|---|
-| `agentic-kit` | Core portability layer. Streaming, message model, providers registry, cross-provider transforms, usage/cost. |
-| `@agentic-kit/agent` | Sequential agent loop. Tool execution, lifecycle events, abort/continue, JSON Schema validation. |
-| `@agentic-kit/anthropic` | Provider adapter. Streaming, thinking, tool calls, multimodal, abort. |
-| `@agentic-kit/openai` | Provider adapter. Streaming, reasoning, tool calls, multimodal, abort. OpenAI-compatible endpoints. |
-| `@agentic-kit/ollama` | Provider adapter. Local inference, embeddings. **Tool execution in streaming is a stub.** |
+| Package                  | Status                                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `agentic-kit`            | Core portability layer. Streaming, message model, providers registry, cross-provider transforms, usage/cost. |
+| `@agentic-kit/agent`     | Sequential agent loop. Tool execution, lifecycle events, abort/continue, JSON Schema validation.             |
+| `@agentic-kit/anthropic` | Provider adapter. Streaming, thinking, tool calls, multimodal, abort.                                        |
+| `@agentic-kit/openai`    | Provider adapter. Streaming, reasoning, tool calls, multimodal, abort. OpenAI-compatible endpoints.          |
+| `@agentic-kit/ollama`    | Provider adapter. Local inference, embeddings. **Tool execution in streaming is a stub.**                    |
 
 The agent loop today runs to completion in-process: it does not pause for
 out-of-band input and has no transport layer above it. Consumers wire it into
@@ -272,6 +272,16 @@ Unit tests in `@agentic-kit/agent`.
   contract suite against `MemoryRunStore`. The same export is consumed by
   any third-party `RunStore` implementation.
 - Concurrent save/load on the same id (last write wins, no torn reads).
+- Re-pause `createdAt` preservation: a second `save()` of the same run id keeps
+  the original `createdAt`; only `updatedAt` advances. (1.1 does not yet
+  enforce this — fold into the contract suite.)
+- Abort-during-save race: `agent.abort()` while a `runStore.save()` is
+  in-flight resolves without orphaning the persisted record or surfacing a
+  rejected save promise.
+- Mixed-batch tool ordering: when an assistant turn contains a regular tool
+  call followed by a decision-bearing tool whose arguments fail validation,
+  the persisted `messages` order matches the LLM's tool-call order. (Latent
+  in 1.1's invalid-args branch; surfaces only via the contract suite.)
 
 ### 1.3 Run Serialization Helpers
 
@@ -556,14 +566,14 @@ companion packages, or other ecosystems entirely.
 
 ## Package Layout After Phase 1
 
-| Package | Change |
-|---|---|
-| `agentic-kit` | unchanged |
-| `@agentic-kit/agent` | extended: pausable tools, `RunStore`, run serialization helpers, middleware hooks (Phase 2) |
-| `@agentic-kit/anthropic` | unchanged in Phase 1; caching API in Phase 2 |
-| `@agentic-kit/openai` | unchanged in Phase 1; caching API in Phase 2 |
-| `@agentic-kit/ollama` | unchanged in Phase 1; tool support in Phase 3 |
-| `@agentic-kit/react` | **new** — `useChat` hook |
+| Package                  | Change                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------- |
+| `agentic-kit`            | unchanged                                                                                   |
+| `@agentic-kit/agent`     | extended: pausable tools, `RunStore`, run serialization helpers, middleware hooks (Phase 2) |
+| `@agentic-kit/anthropic` | unchanged in Phase 1; caching API in Phase 2                                                |
+| `@agentic-kit/openai`    | unchanged in Phase 1; caching API in Phase 2                                                |
+| `@agentic-kit/ollama`    | unchanged in Phase 1; tool support in Phase 3                                               |
+| `@agentic-kit/react`     | **new** — `useChat` hook                                                                    |
 
 Shared test helpers live in `tools/test/` (repo-internal directory, not a
 package). Phase 2 and 3 add no new packages; everything extends in place.
@@ -573,10 +583,18 @@ package). Phase 2 and 3 add no new packages; everything extends in place.
 - **Run record schema versioning.** Once `RunStore` is shipped, the on-disk
   `AgentRun` shape becomes a compatibility surface. Decide on an explicit
   version field and migration story before 1.0.
-- **Decision schema validator scope.** The agent already validates tool inputs
-  against JSON Schema (`packages/agent/src/validation.ts`). The decision
-  validator should reuse that same code path. Confirm coverage of the
-  features needed (discriminated unions in particular).
+- **Decision schema validator scope.** Resolved (1.1): the decision validator
+  reuses `validateSchema` from `packages/agent/src/validation.ts` — same code
+  path as tool inputs. Discriminated-union and `oneOf` / `anyOf` coverage is
+  still untested; fold into the 1.2 contract suite.
+- **Lifecycle events across pause boundaries.** On resume, `agent_start`
+  re-fires (each `runLoop` entry is a fresh start) but `turn_start` does not
+  (the persisted assistant message is reused, not regenerated). This
+  asymmetry is invisible to a single-prompt consumer but matters for any
+  listener that tracks turn vs. run lifecycle. Decide before 1.4 whether to
+  introduce a distinct `agent_resume` event or to redocument `agent_start`
+  with explicit "loop entry" semantics — the `@agentic-kit/react` hook will
+  codify whichever choice externally.
 - **SSE vs. NDJSON.** SSE is the proposed default. NDJSON is simpler but lacks
   reconnection semantics and event-type framing. Revisit if real-world
   consumers report SSE problems behind specific proxies.
