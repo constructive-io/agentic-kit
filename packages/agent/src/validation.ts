@@ -12,7 +12,7 @@ export function validateToolArguments(
   throw new Error(`Tool argument validation failed:\n${errors.map((error) => `- ${error}`).join('\n')}`);
 }
 
-function validateSchema(schema: JsonSchema, value: unknown, path: string): string[] {
+export function validateSchema(schema: JsonSchema, value: unknown, path: string): string[] {
   if (!schema || Object.keys(schema).length === 0) {
     return [];
   }
