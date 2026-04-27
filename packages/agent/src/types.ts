@@ -10,6 +10,8 @@ import type {
   ToolResultMessage,
 } from 'agentic-kit';
 
+import type { RunStore } from './run-store.js';
+
 export interface AgentToolResult<TDetails = unknown> {
   content: ToolResultMessage<TDetails>['content'];
   details?: TDetails;
@@ -21,9 +23,11 @@ export type AgentToolUpdateCallback<TDetails = unknown> = (
 
 export interface AgentTool<TDetails = unknown> extends ToolDefinition {
   label: string;
+  decision?: JsonSchema;
   execute: (
     toolCallId: string,
     params: Record<string, unknown>,
+    decision: unknown,
     signal?: AbortSignal,
     onUpdate?: AgentToolUpdateCallback<TDetails>
   ) => Promise<AgentToolResult<TDetails>>;
@@ -66,6 +70,14 @@ export type AgentEvent =
       toolName: string;
       result: AgentToolResult;
       isError: boolean;
+    }
+  | {
+      type: 'tool_decision_pending';
+      runId: string;
+      toolCallId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+      schema: JsonSchema;
     };
 
 export interface AgentOptions {
@@ -80,4 +92,6 @@ export interface AgentOptions {
     schema: JsonSchema,
     args: Record<string, unknown>
   ) => Record<string, unknown>;
+  runStore?: RunStore;
+  generateRunId?: () => string;
 }
