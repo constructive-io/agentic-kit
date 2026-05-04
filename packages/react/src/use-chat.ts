@@ -191,24 +191,38 @@ export function useChat(options: UseChatOptions): UseChatResult {
   const respondWithDecision = useCallback(
     async (toolCallId: string, value: unknown): Promise<void> => {
       const current = messagesRef.current;
-      if (current.length === 0) {
-        throw new Error('No messages to attach a decision to');
+      let targetIdx = -1;
+      for (let i = current.length - 1; i >= 0; i--) {
+        const msg = current[i];
+        if (msg.role !== 'assistant') continue;
+        const match = msg.content.find(
+          (block) => block.type === 'toolCall' && block.id === toolCallId
+        );
+        if (!match) continue;
+        if ('decision' in match && match.decision !== undefined) continue;
+        targetIdx = i;
+        break;
       }
-      const lastIdx = current.length - 1;
-      const last = current[lastIdx];
-      if (last.role !== 'assistant') {
-        throw new Error('Last message is not an assistant message; cannot attach a decision');
+      if (targetIdx === -1) {
+        throw new Error(
+          `No pending decision for toolCallId '${toolCallId}'`
+        );
       }
+      const target = current[targetIdx] as AssistantMessage;
       const updatedAssistant: AssistantMessage = {
-        ...last,
-        content: last.content.map((block) => {
+        ...target,
+        content: target.content.map((block) => {
           if (block.type !== 'toolCall' || block.id !== toolCallId) {
             return block;
           }
           return { ...block, decision: value };
         }),
       };
-      const requestMessages = [...current.slice(0, lastIdx), updatedAssistant];
+      const requestMessages = [
+        ...current.slice(0, targetIdx),
+        updatedAssistant,
+        ...current.slice(targetIdx + 1),
+      ];
       setMessages(requestMessages);
       messagesRef.current = requestMessages;
       setPendingDecision(undefined);

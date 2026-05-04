@@ -335,6 +335,109 @@ describe('useChat', () => {
       expect(result.current.pendingDecision).toBeUndefined();
       expect(result.current.isStreaming).toBe(false);
     });
+
+    it('finds the pending assistant by toolCallId when a later message was appended', async () => {
+      // Simulates the queue-based architecture: a system note (modelled as a
+      // user-role message) lands after the pause, so the trailing message is
+      // not the assistant carrying the pending tool call.
+      const assistantWithToolCall = makeAssistantWithToolCall();
+      const trailingNote = makeUser('queued note arrived after pause', 99);
+      const initial: Message[] = [
+        makeUser('hi'),
+        assistantWithToolCall,
+        trailingNote,
+      ];
+      const fetchFn = jest.fn(
+        async (_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+          streamFromEvents([
+            { type: 'agent_start' },
+            { type: 'agent_end', messages: initial },
+          ])
+      );
+
+      const { result } = renderHook(() =>
+        useChat({ api: '/chat', fetch: fetchFn, initialMessages: initial })
+      );
+
+      await act(async () => {
+        await result.current.respondWithDecision('call_1', 'allow');
+      });
+
+      const sent = JSON.parse(fetchFn.mock.calls[0][1]!.body as string);
+      expect(sent.messages).toHaveLength(3);
+      expect(sent.messages[1].content[0]).toMatchObject({
+        type: 'toolCall',
+        id: 'call_1',
+        decision: 'allow',
+      });
+      // Trailing note is preserved in its position.
+      expect(sent.messages[2]).toMatchObject({ role: 'user', content: 'queued note arrived after pause' });
+    });
+
+    it('throws when no assistant has a pending decision for the toolCallId', async () => {
+      const { result } = renderHook(() => useChat({ api: '/chat' }));
+
+      await expect(
+        act(async () => {
+          await result.current.respondWithDecision('call_unknown', 'allow');
+        })
+      ).rejects.toThrow(/No pending decision for toolCallId 'call_unknown'/);
+    });
+
+    it('skips assistants whose matching toolCall already has a decision', async () => {
+      // Two assistants with different pending toolCallIds. Only the second
+      // matches; the first should be ignored even though it has a decision
+      // already attached for its own (unrelated) call.
+      const earlierWithResolvedDecision = makeFakeAssistantMessage({
+        stopReason: 'toolUse',
+        content: [
+          {
+            type: 'toolCall',
+            id: 'call_resolved',
+            name: 'echo',
+            arguments: { text: 'first' },
+            rawArguments: '{"text":"first"}',
+            decision: 'allow',
+          },
+        ],
+      });
+      const laterPending = makeAssistantWithToolCall();
+      const initial: Message[] = [
+        makeUser('first'),
+        earlierWithResolvedDecision,
+        makeUser('second'),
+        laterPending,
+      ];
+      const fetchFn = jest.fn(
+        async (_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+          streamFromEvents([
+            { type: 'agent_start' },
+            { type: 'agent_end', messages: initial },
+          ])
+      );
+
+      const { result } = renderHook(() =>
+        useChat({ api: '/chat', fetch: fetchFn, initialMessages: initial })
+      );
+
+      await act(async () => {
+        await result.current.respondWithDecision('call_1', 'allow');
+      });
+
+      const sent = JSON.parse(fetchFn.mock.calls[0][1]!.body as string);
+      // Earlier assistant's already-resolved decision is untouched.
+      expect(sent.messages[1].content[0]).toMatchObject({
+        type: 'toolCall',
+        id: 'call_resolved',
+        decision: 'allow',
+      });
+      // Later assistant's matching call gets the new decision.
+      expect(sent.messages[3].content[0]).toMatchObject({
+        type: 'toolCall',
+        id: 'call_1',
+        decision: 'allow',
+      });
+    });
   });
 
   describe('error handling', () => {
