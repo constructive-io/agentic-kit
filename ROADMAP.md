@@ -4,6 +4,26 @@ This document plans the next phases of work for `agentic-kit`. It supersedes
 neither `REDESIGN_DECISIONS.md` nor `README.md` — those describe what exists.
 This describes what will exist next, why, and what is explicitly out of scope.
 
+## Progress
+
+- [x] **Phase 0 — Test Infrastructure**
+  - [x] 0.1 Test Conventions
+  - [x] 0.2 Shared Test Helpers (`tools/test/`)
+  - [ ] 0.3 Integration Test Lane (optional in Phase 1)
+  - [x] 0.4 SSE Wire-Format Tests
+- [x] **Phase 1 — Pause/Resume + React Bindings**
+  - [x] 1.1 Pausable Tools
+  - [x] 1.2 Run Serialization Helpers
+  - [x] 1.3 `@agentic-kit/react`
+- [ ] **Phase 2 — Production Polish**
+  - [ ] 2.1 Prompt Caching API
+  - [ ] 2.2 Telemetry / Middleware Hooks
+- [ ] **Phase 3 — Optional Extensions**
+  - [ ] 3.1 Full Ollama Tool Support
+  - [ ] 3.2 Retry / Backoff
+  - [ ] 3.3 Stream Resume on Disconnect (introduces opt-in `RunStore`)
+  - [ ] 3.4 Client-Side Tool Execution
+
 ## Current State (snapshot)
 
 | Package                  | Status                                                                                                       |
@@ -319,8 +339,8 @@ const chat = useChat({
   api: '/api/chat',
   body: () => ({ /* extra request body fields */ }),
   initialMessages: storedMessages,
-  onMessage: (m) => {},          // streaming partial state
-  onFinish: (m) => {},           // turn complete; consumer may persist
+  onMessage: (m) => {},          // fires once per completed message in the stream
+  onFinish: (m) => {},           // fires once per agent_end with the final assistant message
   onDecisionPending: (event) => {},  // tool paused; consumer renders UI
 })
 
@@ -337,14 +357,21 @@ Behaviors the hook is responsible for:
 
 - POSTing to `api` with `messages` plus any consumer-supplied body fields.
 - Parsing the SSE response into `AgentEvent`s and folding them into `messages`.
-- Emitting `onMessage` per partial update, `onFinish` per turn end.
+  `message_start`/`message_update` drive in-flight rendering by replacing the
+  trailing assistant slot; `message_end` finalizes; `agent_end` is authoritative
+  and replaces the local message log with `event.messages`.
+- Emitting `onMessage` per `message_end` (one call per completed message —
+  user, assistant, tool result), `onFinish` per `agent_end` with the final
+  assistant message.
 - Surfacing `tool_decision_pending` events as `chat.pendingDecision` and via
-  `onDecisionPending`.
+  `onDecisionPending`. Pause = stream ended, hook idle, awaiting decision.
 - `respondWithDecision(toolCallId, value)`: write the decision into the
-  matching tool-call content block in `messages`, then POST the augmented
-  `messages` back to the **same `api` endpoint**. No separate `/resume` route,
-  no `runId` plumbing — the message log carries everything the server needs.
-- Plumbing an `AbortSignal` through `chat.abort()`.
+  matching tool-call content block in the trailing assistant message, then
+  immediately POST the augmented `messages` back to the **same `api`
+  endpoint**. No separate `/resume` route, no `runId` plumbing — the message
+  log carries everything the server needs.
+- Plumbing an `AbortSignal` through `chat.abort()`. Aborts do **not** populate
+  `chat.error`; only non-200 responses and genuine network failures do.
 
 The hook does not own persistence, modes, system prompts, or any UI shape.
 
@@ -366,7 +393,11 @@ return `createScriptedSSEResponse(events)` from 0.2.
   stream folds into `messages`. Assert the POSTed body contains the decision
   on the right tool call.
 - Network error / non-200 response: `chat.error` set; `messages` not corrupted.
-- Malformed SSE bytes: hook surfaces an error rather than crashing.
+- Malformed SSE bytes: silently dropped by `parseSSEStream` (the parser
+  swallows JSON parse errors and yields nothing for that frame); the hook does
+  not crash and continues folding valid events on either side. If the
+  underlying stream itself errors mid-read, that propagates and is surfaced
+  via `chat.error`.
 - `initialMessages` hydrates state on mount.
 
 ---
@@ -567,20 +598,22 @@ package). Phase 2 and 3 add no new packages; everything extends in place.
   reuses `validateSchema` from `packages/agent/src/validation.ts` — same code
   path as tool inputs. Discriminated-union and `oneOf` / `anyOf` coverage is
   still untested; fold into the 1.1 test matrix.
-- **Lifecycle events across pause boundaries.** Each entry into the loop
-  (whether via `prompt()` or `continue()` after a decision) re-fires
-  `agent_start`. Consumers that distinguish "fresh prompt" from "resumed
-  loop" need a hint. Decide before 1.3 whether to add a distinct
-  `agent_resume` event or to redocument `agent_start` with explicit
-  "loop entry" semantics — the `@agentic-kit/react` hook codifies the
-  choice externally.
+- **Lifecycle events across pause boundaries.** Resolved (1.3): no separate
+  `agent_resume` event. `agent_start` carries explicit "loop entry" semantics
+  — fired on every entry into the loop (fresh prompt or resumed continuation).
+  `useChat` does not handle `agent_start` as a state-reset trigger; reset
+  happens in `send()` / `respondWithDecision()` before the fetch, which is
+  the only place that knows whether a run is starting.
 - **SSE vs. NDJSON.** SSE is the proposed default. NDJSON is simpler but lacks
   reconnection semantics and event-type framing. Revisit if real-world
   consumers report SSE problems behind specific proxies.
-- **`respondWithDecision` auto-fire vs. explicit send.** Whether the React
-  hook should auto-POST the augmented messages immediately or expose a
-  separate `send()` step. Default to auto for ergonomics (matches AI SDK's
-  `addToolApprovalResponse` → `sendAutomaticallyWhen` flow); expose an opt-out.
+- **`respondWithDecision` auto-fire vs. explicit send.** Resolved (1.3):
+  auto-fire. `respondWithDecision(toolCallId, value)` mutates the trailing
+  assistant's tool-call block, syncs `messages`, and immediately re-POSTs to
+  the same `api`. Matches AI SDK's `addToolApprovalResponse` →
+  `sendAutomaticallyWhen` ergonomics. An explicit opt-out is not exposed yet;
+  if a real consumer needs it, add a `respondWithDecision` overload that
+  returns the augmented messages without sending.
 - **Live test policy for paid providers.** Anthropic/OpenAI live tests would
   burn API credits. Default position: gated `*.live.test.ts` files with
   env-var keys, manually triggered, never required by per-PR CI.
