@@ -36,6 +36,7 @@ export interface AgentState {
   isStreaming: boolean;
   messages: Message[];
   model: ModelDescriptor;
+  stepCount: number;
   streamMessage: AssistantMessage | null;
   streamOptions?: Omit<StreamOptions, 'signal'>;
   systemPrompt: string;
@@ -48,7 +49,7 @@ export interface AgentEventBase {
 
 export type AgentEvent =
   | { type: 'agent_start' }
-  | { type: 'agent_end'; messages: Message[] }
+  | { type: 'agent_end'; messages: Message[]; stopReason?: 'completed' | 'max_steps' }
   | { type: 'turn_start' }
   | { type: 'turn_end'; message: AssistantMessage; toolResults: ToolResultMessage[] }
   | { type: 'message_start'; message: Message }
@@ -79,6 +80,12 @@ export type AgentEvent =
 
 export interface AgentOptions {
   initialState: Pick<AgentState, 'model'> & Partial<Omit<AgentState, 'model'>>;
+  /**
+   * Maximum number of model invocations the agent will perform per run.
+   * One model call counts as one step. Counter persists across `continue()`
+   * — it only resets in `prompt()`. Default: unlimited.
+   */
+  maxSteps?: number;
   streamFn?: (
     model: ModelDescriptor,
     context: Context,

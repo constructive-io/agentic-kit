@@ -68,6 +68,7 @@ export async function POST(req: Request): Promise<Response> {
   const agent = new Agent({
     initialState: { model, tools, systemPrompt: SYSTEM_PROMPT },
     streamFn: (m, ctx, opts) => adapter.stream(m, ctx, opts),
+    maxSteps: 5,
   });
 
   const isResume = lastMessageHasPendingDecision(messages);

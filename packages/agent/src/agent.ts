@@ -32,6 +32,7 @@ export class Agent {
   private readonly transformContext?: AgentOptions['transformContext'];
   private readonly streamFn: NonNullable<AgentOptions['streamFn']>;
   private readonly validateToolArguments: NonNullable<AgentOptions['validateToolArguments']>;
+  private readonly defaultMaxSteps?: number;
   private abortController?: AbortController;
   private running?: Promise<void>;
   private runChannel?: { push: RunChannelPush };
@@ -44,6 +45,7 @@ export class Agent {
       tools: [],
       messages: [],
       isStreaming: false,
+      stepCount: 0,
       streamMessage: null,
       streamOptions: undefined,
       ...options.initialState,
@@ -51,6 +53,7 @@ export class Agent {
     this.streamFn = options.streamFn ?? stream;
     this.transformContext = options.transformContext;
     this.validateToolArguments = options.validateToolArguments ?? defaultValidateToolArguments;
+    this.defaultMaxSteps = options.maxSteps;
   }
 
   get state(): AgentState {
@@ -106,44 +109,48 @@ export class Agent {
     return this.running ?? Promise.resolve();
   }
 
-  prompt(input: string | Message): AgentRunHandle {
+  prompt(input: string | Message, opts?: { maxSteps?: number }): AgentRunHandle {
     if (this._state.isStreaming) {
       throw new Error('Agent is already processing a prompt');
     }
 
     const message = typeof input === 'string' ? createUserMessage(input) : input;
+    this._state.stepCount = 0;
 
     return new DefaultAgentRunHandle(async (push, signal) =>
       this.runLoop({
         initialMessages: [message],
         externalPush: push ?? undefined,
         externalAbortSignal: signal,
+        maxSteps: opts?.maxSteps ?? this.defaultMaxSteps,
       })
     );
   }
 
-  continue(): AgentRunHandle {
+  continue(opts?: { maxSteps?: number }): AgentRunHandle {
     if (this._state.isStreaming) {
       throw new Error('Agent is already processing');
     }
 
-    const lastMessage = this._state.messages[this._state.messages.length - 1];
-    if (!lastMessage) {
+    if (this._state.messages.length === 0) {
       throw new Error('No messages to continue from');
     }
 
-    if (lastMessage.role === 'assistant') {
-      const pendingDecisions = this.findPendingDecisions(lastMessage);
-      if (pendingDecisions.length === 0) {
-        throw new Error(
-          'Cannot continue from trailing assistant message: no tool calls awaiting a decision'
-        );
-      }
+    const pendingMessage = this.findMostRecentPendingAssistant();
+    if (pendingMessage) {
+      const pendingDecisions = this.findPendingDecisions(pendingMessage);
       for (const { tool, decision } of pendingDecisions) {
         const errors = validateSchema(tool.decision!, decision, 'root');
         if (errors.length > 0) {
           throw new DecisionValidationError(tool.name, errors);
         }
+      }
+    } else {
+      const lastMessage = this._state.messages[this._state.messages.length - 1];
+      if (lastMessage.role === 'assistant') {
+        throw new Error(
+          'Cannot continue from trailing assistant message: no tool calls awaiting a decision'
+        );
       }
     }
 
@@ -151,8 +158,19 @@ export class Agent {
       this.runLoop({
         externalPush: push ?? undefined,
         externalAbortSignal: signal,
+        maxSteps: opts?.maxSteps ?? this.defaultMaxSteps,
       })
     );
+  }
+
+  private findMostRecentPendingAssistant(): AssistantMessage | undefined {
+    for (let i = this._state.messages.length - 1; i >= 0; i--) {
+      const msg = this._state.messages[i];
+      if (msg.role !== 'assistant') continue;
+      const pending = this.findPendingDecisions(msg);
+      if (pending.length > 0) return msg;
+    }
+    return undefined;
   }
 
   private findPendingDecisions(
@@ -188,6 +206,7 @@ export class Agent {
     initialMessages?: Message[];
     externalPush?: RunChannelPush;
     externalAbortSignal?: AbortSignal;
+    maxSteps?: number;
   }): Promise<void> {
     this.running = (async () => {
       this.abortController = new AbortController();
@@ -208,6 +227,8 @@ export class Agent {
         }
       }
 
+      let stopReason: 'completed' | 'max_steps' = 'completed';
+
       try {
         await this.emit({ type: 'agent_start' });
 
@@ -219,20 +240,25 @@ export class Agent {
           }
         }
 
-        let resumingFromTrailingAssistant =
-          this._state.messages[this._state.messages.length - 1]?.role === 'assistant';
+        let resumeAssistant: AssistantMessage | undefined =
+          this.findMostRecentPendingAssistant();
 
         while (true) {
           let assistantMessage: AssistantMessage;
 
-          if (resumingFromTrailingAssistant) {
-            const last = this._state.messages[this._state.messages.length - 1];
-            if (!last || last.role !== 'assistant') {
-              throw new Error('Cannot resume: last message is not an assistant message');
-            }
-            assistantMessage = last;
-            resumingFromTrailingAssistant = false;
+          if (resumeAssistant) {
+            assistantMessage = resumeAssistant;
+            resumeAssistant = undefined;
           } else {
+            if (
+              opts.maxSteps !== undefined &&
+              this._state.stepCount >= opts.maxSteps
+            ) {
+              stopReason = 'max_steps';
+              break;
+            }
+            this._state.stepCount += 1;
+
             await this.emit({ type: 'turn_start' });
             assistantMessage = await this.generateAssistantMessage(localAbortController.signal);
             this.appendMessage(assistantMessage);
@@ -262,7 +288,7 @@ export class Agent {
           await this.emit({ type: 'turn_end', message: assistantMessage, toolResults: outcome.results });
         }
 
-        await this.emit({ type: 'agent_end', messages: [...this._state.messages] });
+        await this.emit({ type: 'agent_end', messages: [...this._state.messages], stopReason });
       } finally {
         if (opts.externalAbortSignal) {
           opts.externalAbortSignal.removeEventListener('abort', onExternalAbort);

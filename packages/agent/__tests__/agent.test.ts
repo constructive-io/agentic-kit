@@ -2,6 +2,7 @@ import {
   type AssistantMessage,
   type Context,
   createAssistantMessageEventStream,
+  type Message,
   type ModelDescriptor,
   type ToolCallContent,
 } from 'agentic-kit';
@@ -346,6 +347,41 @@ describe('@agentic-kit/agent — pausable tools', () => {
     expect(() => agent.continue()).toThrow(/no tool calls awaiting a decision/);
   });
 
+  it('continue() resumes from a non-trailing assistant when a later message was appended after the pause', async () => {
+    const provider = createScriptedProvider({ responses: [pauseResponse(), finalResponse()] });
+    const execute = jest.fn(
+      async (_id: string, _params: Record<string, unknown>, decision: unknown) => ({
+        content: [{ type: 'text' as const, text: `decision=${JSON.stringify(decision)}` }],
+      })
+    );
+
+    const agent = new Agent({
+      initialState: { model: makeFakeModel() },
+      streamFn: provider.stream,
+    });
+    agent.setTools([makeApprovalTool(execute)]);
+
+    await agent.prompt('approve thing');
+
+    attachDecision(agent, 'tool_1', { approved: true });
+
+    const trailingNote: Message = {
+      role: 'user',
+      content: 'side note injected by an external queue while paused',
+      timestamp: Date.now(),
+    };
+    agent.replaceMessages([...agent.state.messages, trailingNote]);
+
+    await agent.continue();
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[2]).toEqual({ approved: true });
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'finalized' }],
+    });
+  });
+
   it('abort() while paused stops further work without throwing', async () => {
     const provider = createScriptedProvider({ responses: [pauseResponse()] });
 
@@ -478,5 +514,126 @@ describe('@agentic-kit/agent — pausable tools', () => {
     expect(execute).toHaveBeenCalledTimes(1);
     expect(events.some((e) => e.type === 'tool_decision_pending')).toBe(false);
     expect(events.some((e) => e.type === 'agent_end')).toBe(true);
+  });
+});
+
+describe('@agentic-kit/agent — maxSteps', () => {
+  function makeEchoTool(): AgentTool {
+    return {
+      name: 'echo',
+      label: 'Echo',
+      description: 'Echo text',
+      parameters: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text'],
+      },
+      execute: async (_id, params) => ({
+        content: [{ type: 'text', text: String(params.text) }],
+      }),
+    };
+  }
+
+  function toolThenText(toolText = 'one', finalText = 'done') {
+    return [
+      makeFakeAssistantMessage({
+        stopReason: 'toolUse',
+        content: [
+          { type: 'toolCall', id: 'tool_1', name: 'echo', arguments: { text: toolText } },
+        ],
+      }),
+      makeFakeAssistantMessage({
+        stopReason: 'stop',
+        content: [{ type: 'text', text: finalText }],
+      }),
+    ];
+  }
+
+  it('halts after the configured number of model calls and emits agent_end with stopReason=max_steps', async () => {
+    const provider = createScriptedProvider({ responses: toolThenText() });
+    const agent = new Agent({
+      initialState: { model: makeFakeModel() },
+      streamFn: provider.stream,
+      maxSteps: 1,
+    });
+    agent.setTools([makeEchoTool()]);
+
+    const events: AgentEvent[] = [];
+    agent.subscribe((e) => events.push(e));
+
+    await agent.prompt('go');
+
+    expect(agent.state.stepCount).toBe(1);
+    // Tool ran for the first turn, but no second model call.
+    const toolResults = agent.state.messages.filter((m) => m.role === 'toolResult');
+    expect(toolResults).toHaveLength(1);
+    const assistants = agent.state.messages.filter((m) => m.role === 'assistant');
+    expect(assistants).toHaveLength(1);
+
+    const end = events.find((e) => e.type === 'agent_end');
+    expect(end).toMatchObject({ type: 'agent_end', stopReason: 'max_steps' });
+  });
+
+  it('does not enforce a cap when maxSteps is undefined (no behavior change)', async () => {
+    const provider = createScriptedProvider({ responses: toolThenText() });
+    const agent = new Agent({
+      initialState: { model: makeFakeModel() },
+      streamFn: provider.stream,
+    });
+    agent.setTools([makeEchoTool()]);
+
+    const events: AgentEvent[] = [];
+    agent.subscribe((e) => events.push(e));
+
+    await agent.prompt('go');
+
+    expect(agent.state.stepCount).toBe(2);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'done' }],
+    });
+    const end = events.find((e) => e.type === 'agent_end');
+    expect(end).toMatchObject({ stopReason: 'completed' });
+  });
+
+  it('per-call maxSteps overrides the constructor default', async () => {
+    const provider = createScriptedProvider({ responses: toolThenText() });
+    const agent = new Agent({
+      initialState: { model: makeFakeModel() },
+      streamFn: provider.stream,
+      maxSteps: 1, // would cap; per-call override allows the second call
+    });
+    agent.setTools([makeEchoTool()]);
+
+    await agent.prompt('go', { maxSteps: 5 });
+
+    expect(agent.state.stepCount).toBe(2);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'done' }],
+    });
+  });
+
+  it('prompt() resets stepCount; continue() preserves it across turns', async () => {
+    // Two prompt rounds: first one consumes 2 steps; second prompt resets to 0.
+    const responses = [
+      ...toolThenText('first', 'first-done'),
+      makeFakeAssistantMessage({
+        stopReason: 'stop',
+        content: [{ type: 'text', text: 'second-done' }],
+      }),
+    ];
+    const provider = createScriptedProvider({ responses });
+    const agent = new Agent({
+      initialState: { model: makeFakeModel() },
+      streamFn: provider.stream,
+    });
+    agent.setTools([makeEchoTool()]);
+
+    await agent.prompt('first');
+    expect(agent.state.stepCount).toBe(2);
+
+    await agent.prompt('second');
+    expect(agent.state.stepCount).toBe(1);
   });
 });
