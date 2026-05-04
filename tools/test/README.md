@@ -12,11 +12,6 @@ Not a workspace package, not published.
 - `createScriptedSSEResponse(events)` — `Response` whose body serializes each `AgentEvent` as one SSE frame (`data: <json>\n\n`).
 - `parseSSEStream(stream)` — async iterable that parses `AgentEvent` SSE frames from a `ReadableStream<Uint8Array>`. Handles split chunks, multi-line `data:`, comment lines, event-type framing, trailing newlines, and mid-event abort (incomplete trailing event is dropped, per SSE spec).
 
-## Deferred
-
-`runRunStoreContractTests(makeStore)` lands with Phase 1.2 alongside the
-`RunStore` interface. Adding it now would be dead scaffolding.
-
 ## Adding a helper
 
 Promote a helper to `tools/test/` only when a third package needs the same

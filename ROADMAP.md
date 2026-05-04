@@ -85,9 +85,6 @@ function createScriptedSSEResponse(events: AgentEvent[]): Response
 // SSE parser for assertions on emitted bytes
 function parseSSEStream(stream: ReadableStream<Uint8Array>): AsyncIterable<AgentEvent>
 
-// portable contract suite for any RunStore implementation
-function runRunStoreContractTests(makeStore: () => RunStore | Promise<RunStore>): void
-
 // small fixtures
 function makeFakeModel(overrides?: Partial<ModelDescriptor>): ModelDescriptor
 ```
@@ -102,7 +99,7 @@ dep. That is intentional.
 ### 0.3 Integration Test Lane
 
 A workspace-level `pnpm test:integration` script. Brings up
-`http.createServer` in-process, runs `agent.start(...).toResponse()` against
+`http.createServer` in-process, runs `agent.prompt(...).toResponse()` against
 it, exercises pause/resume across a real HTTP boundary via `fetch`. Mock
 providers, real HTTP, real serialization. Catches wire-format and abort
 regressions that pure unit tests miss.
@@ -122,11 +119,12 @@ the loop.
 
 ## Phase 1 — Pause/Resume + React Bindings (must)
 
-The single architectural change behind Phase 1: the agent loop becomes
-**checkpoint-able**. Tools may declare a `decision` schema; when the loop hits
-such a tool, it persists run state, emits a structured event, and waits for a
-matching decision payload before continuing. Everything else in Phase 1 follows
-from this.
+The single architectural change behind Phase 1: tools may declare a `decision`
+schema. When the loop hits such a tool, it emits a structured event and ends
+the run cleanly. The host writes the decision into the message log; the next
+loop entry executes the tool with that decision. **State lives in the messages
+— there is no separate run store.** Same idea as Vercel AI SDK: a stateless
+server, a stateful client (or persistent message log).
 
 ### 1.1 Pausable Tools
 
@@ -144,14 +142,22 @@ Extend `AgentTool` with an optional `decision` JSON Schema. The agent loop:
 
 1. When the LLM emits a call to a tool that declares `decision`:
    - Validate the LLM's input against `parameters` as today.
-   - Emit a `tool_decision_pending` event with the input and the schema.
-   - Persist the run via the configured `RunStore` (see 1.2).
-   - Halt the loop and return.
-2. The host invokes `agent.resume(runId, decision)`:
-   - Load run state from the `RunStore`.
-   - Validate `decision` against the tool's `decision` schema.
-   - Call `tool.execute(input, decision, ctx)`.
-   - Continue the loop with the result.
+   - Emit a `tool_decision_pending` event with the toolCallId, input, and schema.
+   - Stop the loop. End the run handle (close the stream).
+   - **No persistence.** The agent's in-memory state is fine for in-process
+     consumers; for cross-process consumers, state survives via the message
+     log the host re-POSTs on the next request.
+2. The host attaches the decision to the trailing tool call in the message
+   log (representation: a `decision` payload on the tool-call content block —
+   see Open Questions for the exact shape).
+3. The host calls `agent.continue()` (or constructs a fresh `Agent` over the
+   augmented messages — both work; the message log is the source of truth).
+4. The loop's first action: walk the trailing assistant message's tool calls.
+   For any call that declares `decision`, has a decision attached in the log,
+   and has no matching `tool_result`, validate the decision against the tool's
+   schema and call `tool.execute(toolCallId, input, decision, ctx)`. Append
+   the result to the message log.
+5. Continue the loop normally.
 
 Tools without a `decision` schema run as today — synchronously inside the loop.
 
@@ -171,27 +177,28 @@ interface AgentTool extends ToolDefinition {
 }
 
 class Agent {
-  // existing
-  prompt(input: string | Message): Promise<void>
+  prompt(input: string | Message): AgentRunHandle
+  continue(): AgentRunHandle     // entry point for resume after decision attached
   abort(): void
-
-  // new
-  resume(runId: string, decision: unknown): Promise<void>
 }
 
 type AgentEvent =
   // ... existing events
   | { type: 'tool_decision_pending'
-      runId: string
       toolCallId: string
       toolName: string
       input: Record<string, unknown>
       schema: JsonSchema }
 ```
 
+There is **no `agent.resume(runId, decision)` and no `RunStore`.** The host
+mutates `agent.state.messages` (or the equivalent input to a fresh `Agent`)
+to attach the decision, then re-enters via `continue()` or `prompt()`. The
+loop figures out what to do from the message state.
+
 A pausable tool with no `decision` is invalid — the field's presence is the
-mechanism. Validation runs before `execute` is called; a malformed decision
-rejects with a typed error and does not consume the run.
+mechanism. Decision validation runs before `execute` is called; a malformed
+decision rejects with a typed error and the loop does not advance.
 
 #### Naming
 
@@ -207,83 +214,25 @@ shape — the kit does not over-generalize now.
 Unit tests in `@agentic-kit/agent`. Uses `createScriptedProvider` from 0.2.
 
 - Scripted provider emits a tool call to a `decision`-bearing tool. Assert:
-  `tool_decision_pending` event emitted, `runStore.save` called, loop halted.
-- `agent.resume(runId, valid)` with a fresh scripted response. Assert:
-  `tool.execute` invoked with the decision argument, loop continues, final
-  event emitted.
-- Resume with a decision that fails schema validation. Assert: typed
-  validation error, run not consumed, retry permitted.
-- Resume with non-existent `runId`. Assert: typed `RunNotFound` error.
-- `agent.abort()` while paused. Assert: clean cancellation, run cleaned up.
+  `tool_decision_pending` event fires (with toolCallId, input, schema), the
+  run handle closes cleanly, no `tool.execute` invocation yet, no `tool_result`
+  appended to messages.
+- Attach a valid decision to the trailing tool call in `agent.state.messages`,
+  call `agent.continue()` against a fresh scripted response. Assert:
+  `tool.execute` called with `(toolCallId, input, decision, ...)`, tool result
+  appended, loop continues, final event emitted.
+- Attach a decision that fails schema validation, call `continue()`. Assert:
+  typed validation error surfaced via the event channel, no `execute` call,
+  no `tool_result` appended (the host can fix and retry).
+- `agent.abort()` after the decision-pending event closed the handle: state
+  goes idle, no leaked listeners or in-flight promises.
 - Tool without `decision` still runs synchronously (regression guard).
+- Mixed-batch tool ordering: an assistant turn with a regular tool call
+  followed by a decision-bearing tool whose arguments fail validation. The
+  arg-validation error appends a tool_result before the loop pauses, so
+  message order matches the LLM's tool-call order.
 
-### 1.2 RunStore
-
-#### Problem
-
-Pause/resume across HTTP requests requires the loop's state to survive between
-the pause and the resume call. The kit must define where that state lives
-without forcing a specific backend on consumers.
-
-#### Design
-
-A small interface plus a default implementation. The kit owns the schema of
-what gets persisted (the run record); the consumer owns where it lands.
-
-```ts
-interface AgentRun {
-  id: string
-  model: string
-  systemPrompt?: string
-  tools: ToolDefinition[]
-  messages: Message[]
-  pending?: {
-    toolCallId: string
-    toolName: string
-    input: Record<string, unknown>
-  }
-  createdAt: number
-  updatedAt: number
-}
-
-interface RunStore {
-  save(run: AgentRun): Promise<void>
-  load(id: string): Promise<AgentRun | undefined>
-  delete(id: string): Promise<void>
-}
-
-class MemoryRunStore implements RunStore { /* default, ephemeral */ }
-```
-
-`@agentic-kit/agent` ships `MemoryRunStore` for development and single-process
-deployments. Production users supply a Redis-, KV-, or DB-backed implementation.
-The kit ships no production backend.
-
-The kit deliberately does **not** persist final conversation history. That is a
-consumer concern. See 1.4 for lifecycle hooks.
-
-#### Testing
-
-Unit tests in `@agentic-kit/agent`.
-
-- `MemoryRunStore`: save → load round-trip; `load` of missing id returns
-  `undefined`; `delete` is idempotent; `delete` then `load` returns `undefined`.
-- `runRunStoreContractTests(makeMemoryStore)` from 0.2 runs the portable
-  contract suite against `MemoryRunStore`. The same export is consumed by
-  any third-party `RunStore` implementation.
-- Concurrent save/load on the same id (last write wins, no torn reads).
-- Re-pause `createdAt` preservation: a second `save()` of the same run id keeps
-  the original `createdAt`; only `updatedAt` advances. (1.1 does not yet
-  enforce this — fold into the contract suite.)
-- Abort-during-save race: `agent.abort()` while a `runStore.save()` is
-  in-flight resolves without orphaning the persisted record or surfacing a
-  rejected save promise.
-- Mixed-batch tool ordering: when an assistant turn contains a regular tool
-  call followed by a decision-bearing tool whose arguments fail validation,
-  the persisted `messages` order matches the LLM's tool-call order. (Latent
-  in 1.1's invalid-args branch; surfaces only via the contract suite.)
-
-### 1.3 Run Serialization Helpers
+### 1.2 Run Serialization Helpers
 
 #### Problem
 
@@ -293,8 +242,8 @@ kit should ship the canonical form so consumers do not reinvent it.
 
 #### Design
 
-Standard Web primitives only. No framework helpers. The agent run object
-exposes both pull-based and push-based access.
+Standard Web primitives only. No framework helpers. A run handle exposes both
+pull-based and push-based access.
 
 ```ts
 interface AgentRunHandle {
@@ -302,8 +251,16 @@ interface AgentRunHandle {
   toReadableStream(): ReadableStream<AgentEvent>
   toResponse(init?: ResponseInit): Response   // SSE-shaped body
 }
+```
 
-const handle = agent.start({ messages, ... })
+The handle is returned by whichever entry point starts a loop iteration —
+`agent.prompt(input)` or `agent.continue()`. Both return a handle; both
+produce the same `AgentEvent` stream. (Today these methods return
+`Promise<void>` and require subscribing first; Phase 1 reshapes them to return
+an `AgentRunHandle` so SSE serialization is a one-liner.)
+
+```ts
+const handle = agent.prompt(userMessage)
 return handle.toResponse()
 ```
 
@@ -312,12 +269,16 @@ return handle.toResponse()
 speaks standard `Response` and `ReadableStream`: Next.js App Router, Hono,
 Bun, Deno, Cloudflare Workers, raw Node 18+.
 
-A symmetric pair handles resume:
+There is no separate "resume" entry point. The server handler builds an
+`Agent` from the request body, inspects the trailing message, and chooses:
 
-```ts
-const handle = agent.resumeRun({ runId, decision, runStore })
-return handle.toResponse()
-```
+- Last message is a user turn → `agent.prompt(lastMessage)`.
+- Last assistant message has a tool call with a decision attached and no
+  matching tool_result → `agent.continue()`.
+- Otherwise the request is malformed; reject.
+
+This mirrors AI SDK: the same `/api/chat` endpoint handles both initial sends
+and post-approval continuations, because state lives in `messages`.
 
 The wire format is the kit's `AgentEvent` discriminated union, serialized as
 JSON in SSE `data:` lines. No translation to any third-party protocol; if a
@@ -338,7 +299,7 @@ Unit tests in `@agentic-kit/agent`.
 - Backpressure: stream consumer pauses; producer respects it (no unbounded
   buffer).
 
-### 1.4 `@agentic-kit/react`
+### 1.3 `@agentic-kit/react`
 
 #### Problem
 
@@ -364,7 +325,7 @@ const chat = useChat({
 })
 
 chat.send('hello')
-chat.respondWithDecision(value)  // delivers decision to /resume
+chat.respondWithDecision(toolCallId, value)  // mutates messages, re-POSTs same endpoint
 chat.abort()
 chat.messages         // Message[]
 chat.isStreaming      // boolean
@@ -379,9 +340,10 @@ Behaviors the hook is responsible for:
 - Emitting `onMessage` per partial update, `onFinish` per turn end.
 - Surfacing `tool_decision_pending` events as `chat.pendingDecision` and via
   `onDecisionPending`.
-- Rebroadcasting `respondWithDecision(value)` as a POST to `/resume` (path
-  configurable) with `{ runId, decision }`, and resuming stream consumption
-  from the response.
+- `respondWithDecision(toolCallId, value)`: write the decision into the
+  matching tool-call content block in `messages`, then POST the augmented
+  `messages` back to the **same `api` endpoint**. No separate `/resume` route,
+  no `runId` plumbing — the message log carries everything the server needs.
 - Plumbing an `AbortSignal` through `chat.abort()`.
 
 The hook does not own persistence, modes, system prompts, or any UI shape.
@@ -399,8 +361,10 @@ return `createScriptedSSEResponse(events)` from 0.2.
 - `chat.abort()` reaches the fetch mock's `AbortSignal`; state cleans up; no
   late updates after abort.
 - Decision-pending: `onDecisionPending` fires; `chat.pendingDecision` set;
-  `respondWithDecision(value)` POSTs to `/resume` with `{ runId, decision }`;
-  the resumed stream folds into `messages`.
+  `respondWithDecision(toolCallId, value)` mutates the matching tool-call
+  block in `messages`, POSTs to the same `api` endpoint, and the resumed
+  stream folds into `messages`. Assert the POSTed body contains the decision
+  on the right tool call.
 - Network error / non-200 response: `chat.error` set; `messages` not corrupted.
 - Malformed SSE bytes: hook surfaces an error rather than crashing.
 - `initialMessages` hydrates state on mount.
@@ -497,21 +461,31 @@ Unit tests using an injectable clock.
 - Abort during a retry wait cancels promptly; no further attempts.
 - Retries respect a global deadline; total time bounded.
 
-### 3.3 Stream Resume on Disconnect
+### 3.3 Stream Resume on Disconnect (the only feature that needs a RunStore)
 
-If the agent loop is mid-run when the SSE connection drops, the client should
-be able to reconnect with the run ID and pick up where it left off. The
-machinery is largely a free side-effect of `RunStore` — the run survives;
-only stream-position tracking and an event replay endpoint are new. Useful
-for flaky-network and long-running flows.
+If the agent loop is mid-run when the SSE connection drops — between turns,
+mid-tool, mid-LLM-stream — the client cannot pick up where it left off, only
+re-POST `messages` and start a fresh continuation. The previous in-flight
+events are lost.
+
+This is the **one** Phase 1+ feature the message-log model cannot deliver,
+because the in-flight events are not yet committed to the message log.
+Implementing it requires the agent loop to outlive the HTTP request, and that
+in turn requires persistent state — i.e., the `RunStore` concept the rest of
+the kit deliberately avoids.
+
+Defer until a real consumer asks for it. When that happens, introduce
+`RunStore` here (interface + `MemoryRunStore` default + replay endpoint) as
+an opt-in capability, not a baseline requirement. Phase 1's pause/resume
+will keep working without it.
 
 #### Testing
 
-- Unit: abort an in-flight `events()` iterator. Reload the run by id and call
-  `resumeRun`. Assert: events continue from the last-emitted checkpoint, no
-  duplicate side effects.
+- Unit: abort an in-flight `events()` iterator. With a configured `RunStore`,
+  reload by run id and resume. Assert: events continue from the last-emitted
+  checkpoint, no duplicate side effects.
 - Integration (lane from 0.3): same flow over real HTTP — drop the connection
-  mid-stream, reconnect with `runId`, assert event continuity and correct
+  mid-stream, reconnect with run id, assert event continuity and correct
   `Last-Event-ID` semantics.
 
 ### 3.4 Client-Side Tool Execution
@@ -519,9 +493,11 @@ for flaky-network and long-running flows.
 For tools that genuinely require browser-only capabilities (DOM access,
 WebRTC, File System Access API, locally-running services, hardware bridges,
 wallet signing), introduce a `runs: 'client'` flag. The mechanism reuses the
-pause/resume rails: such tools emit a `tool_client_execute_pending` event,
-the browser-side dispatcher runs the registered local executor, and the
-result returns via the same resume endpoint shape.
+same message-log rails as `decision`: such tools emit a
+`tool_client_execute_pending` event with the toolCallId, the browser-side
+dispatcher runs the registered local executor, the result is written into
+the message log as a `tool_result`, and the client re-POSTs the same
+`/api/chat` endpoint to continue the loop.
 
 This is deferred until a real use case appears. Most agent applications do
 not need it, and shipping it prematurely would constrain the design.
@@ -530,12 +506,14 @@ not need it, and shipping it prematurely would constrain the design.
 
 - Unit (in `@agentic-kit/agent`): protocol layer only. Scripted provider
   emits a `runs: 'client'` tool call. Assert: `tool_client_execute_pending`
-  event fires, loop halts. `agent.resume(runId, { result })` continues with
-  the supplied result as the tool result.
+  event fires, loop closes the run handle, no execute call. After a
+  `tool_result` is appended to messages and `continue()` is called, the loop
+  proceeds with the supplied result.
 - Unit (in `@agentic-kit/react`, jsdom): client dispatcher. Register a local
   executor, fire a synthetic pending event, assert: executor runs with the
-  tool input, resulting POST to `/resume` includes the correct payload, the
-  resumed stream folds into `messages`.
+  tool input, the result is written into the message log, the next POST
+  goes to the same endpoint with the augmented messages, the resumed stream
+  folds into `messages`.
 
 ---
 
@@ -561,46 +539,48 @@ companion packages, or other ecosystems entirely.
   package, not in the conversational core.
 - **System prompt construction utilities.** Prompt design is consumer-owned.
 - **Conversation modes / agent personas.** Application concern.
-- **Built-in production storage backends.** `MemoryRunStore` is the only
-  implementation the kit ships; Redis, KV, DB backends are for consumers.
+- **A separate run store.** Pause/resume rides the message log; there is no
+  `RunStore` in Phase 1. If 3.3 (stream resume on disconnect) ever ships, it
+  introduces an opt-in `RunStore` then.
 
 ## Package Layout After Phase 1
 
-| Package                  | Change                                                                                      |
-| ------------------------ | ------------------------------------------------------------------------------------------- |
-| `agentic-kit`            | unchanged                                                                                   |
-| `@agentic-kit/agent`     | extended: pausable tools, `RunStore`, run serialization helpers, middleware hooks (Phase 2) |
-| `@agentic-kit/anthropic` | unchanged in Phase 1; caching API in Phase 2                                                |
-| `@agentic-kit/openai`    | unchanged in Phase 1; caching API in Phase 2                                                |
-| `@agentic-kit/ollama`    | unchanged in Phase 1; tool support in Phase 3                                               |
-| `@agentic-kit/react`     | **new** — `useChat` hook                                                                    |
+| Package                  | Change                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| `agentic-kit`            | unchanged                                                                             |
+| `@agentic-kit/agent`     | extended: pausable tools (`decision` schema), run serialization helpers; no RunStore  |
+| `@agentic-kit/anthropic` | unchanged in Phase 1; caching API in Phase 2                                          |
+| `@agentic-kit/openai`    | unchanged in Phase 1; caching API in Phase 2                                          |
+| `@agentic-kit/ollama`    | unchanged in Phase 1; tool support in Phase 3                                         |
+| `@agentic-kit/react`     | **new** — `useChat` hook                                                              |
 
 Shared test helpers live in `tools/test/` (repo-internal directory, not a
 package). Phase 2 and 3 add no new packages; everything extends in place.
 
 ## Open Questions
 
-- **Run record schema versioning.** Once `RunStore` is shipped, the on-disk
-  `AgentRun` shape becomes a compatibility surface. Decide on an explicit
-  version field and migration story before 1.0.
+- **Decision representation in the message log.** Resolved (1.1): the decision
+  lives as an optional `decision: unknown` field on the tool-call content
+  block. Existing cross-provider `transformMessages` preserves it via object
+  spread.
 - **Decision schema validator scope.** Resolved (1.1): the decision validator
   reuses `validateSchema` from `packages/agent/src/validation.ts` — same code
   path as tool inputs. Discriminated-union and `oneOf` / `anyOf` coverage is
-  still untested; fold into the 1.2 contract suite.
-- **Lifecycle events across pause boundaries.** On resume, `agent_start`
-  re-fires (each `runLoop` entry is a fresh start) but `turn_start` does not
-  (the persisted assistant message is reused, not regenerated). This
-  asymmetry is invisible to a single-prompt consumer but matters for any
-  listener that tracks turn vs. run lifecycle. Decide before 1.4 whether to
-  introduce a distinct `agent_resume` event or to redocument `agent_start`
-  with explicit "loop entry" semantics — the `@agentic-kit/react` hook will
-  codify whichever choice externally.
+  still untested; fold into the 1.1 test matrix.
+- **Lifecycle events across pause boundaries.** Each entry into the loop
+  (whether via `prompt()` or `continue()` after a decision) re-fires
+  `agent_start`. Consumers that distinguish "fresh prompt" from "resumed
+  loop" need a hint. Decide before 1.3 whether to add a distinct
+  `agent_resume` event or to redocument `agent_start` with explicit
+  "loop entry" semantics — the `@agentic-kit/react` hook codifies the
+  choice externally.
 - **SSE vs. NDJSON.** SSE is the proposed default. NDJSON is simpler but lacks
   reconnection semantics and event-type framing. Revisit if real-world
   consumers report SSE problems behind specific proxies.
-- **`onDecisionPending` ergonomics.** Whether the React hook should auto-route
-  the next stream from `/resume` or require the consumer to call a follow-up
-  method explicitly. Default to auto for ergonomics; expose an opt-out.
+- **`respondWithDecision` auto-fire vs. explicit send.** Whether the React
+  hook should auto-POST the augmented messages immediately or expose a
+  separate `send()` step. Default to auto for ergonomics (matches AI SDK's
+  `addToolApprovalResponse` → `sendAutomaticallyWhen` flow); expose an opt-out.
 - **Live test policy for paid providers.** Anthropic/OpenAI live tests would
   burn API credits. Default position: gated `*.live.test.ts` files with
   env-var keys, manually triggered, never required by per-PR CI.
