@@ -1,4 +1,11 @@
-import fetch from 'cross-fetch';
+import crossFetch from 'cross-fetch';
+
+// Prefer the runtime's native fetch when available. cross-fetch's Node ponyfill
+// returns a node-fetch Response whose body is a Node Readable stream — that
+// lacks `.getReader()`, which this adapter needs for SSE parsing. Native fetch
+// in Node 18+ / browsers / Bun returns a Web ReadableStream.
+const fetch: typeof globalThis.fetch =
+  typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : crossFetch;
 
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
