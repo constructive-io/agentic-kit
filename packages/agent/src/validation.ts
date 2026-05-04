@@ -1,5 +1,16 @@
 import type { JsonSchema } from 'agentic-kit';
 
+export class DecisionValidationError extends Error {
+  readonly toolName: string;
+  readonly errors: string[];
+  constructor(toolName: string, errors: string[]) {
+    super(`Decision validation failed for tool '${toolName}':\n${errors.map((e) => `- ${e}`).join('\n')}`);
+    this.name = 'DecisionValidationError';
+    this.toolName = toolName;
+    this.errors = errors;
+  }
+}
+
 export function validateToolArguments(
   schema: JsonSchema,
   args: Record<string, unknown>

@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import {
   type AssistantMessage,
   type Context,
@@ -9,18 +7,13 @@ import {
   stream,
   type StreamOptions,
   type ToolCallContent,
-  type ToolDefinition,
 } from 'agentic-kit';
 
 import {
-  type AgentRun,
-  type AgentRunPending,
-  DecisionValidationError,
-  MemoryRunStore,
-  RunNotFoundError,
-  type RunStore,
-  ToolNotRegisteredError,
-} from './run-store.js';
+  type AgentRunHandle,
+  DefaultAgentRunHandle,
+  type RunChannelPush,
+} from './run-handle.js';
 import type {
   AgentEvent,
   AgentOptions,
@@ -29,6 +22,7 @@ import type {
   AgentToolResult,
 } from './types.js';
 import {
+  DecisionValidationError,
   validateSchema,
   validateToolArguments as defaultValidateToolArguments,
 } from './validation.js';
@@ -38,12 +32,9 @@ export class Agent {
   private readonly transformContext?: AgentOptions['transformContext'];
   private readonly streamFn: NonNullable<AgentOptions['streamFn']>;
   private readonly validateToolArguments: NonNullable<AgentOptions['validateToolArguments']>;
-  private readonly runStore: RunStore;
-  private readonly generateRunId: () => string;
   private abortController?: AbortController;
   private running?: Promise<void>;
-  private currentRunId?: string;
-  private pausedRunId?: string;
+  private runChannel?: { push: RunChannelPush };
 
   private _state: AgentState;
 
@@ -60,8 +51,6 @@ export class Agent {
     this.streamFn = options.streamFn ?? stream;
     this.transformContext = options.transformContext;
     this.validateToolArguments = options.validateToolArguments ?? defaultValidateToolArguments;
-    this.runStore = options.runStore ?? new MemoryRunStore();
-    this.generateRunId = options.generateRunId ?? randomUUID;
   }
 
   get state(): AgentState {
@@ -110,12 +99,6 @@ export class Agent {
   }
 
   abort(): void {
-    if (this.pausedRunId) {
-      const runId = this.pausedRunId;
-      this.pausedRunId = undefined;
-      void this.runStore.delete(runId);
-      return;
-    }
     this.abortController?.abort();
   }
 
@@ -123,125 +106,141 @@ export class Agent {
     return this.running ?? Promise.resolve();
   }
 
-  async prompt(input: string | Message): Promise<void> {
+  prompt(input: string | Message): AgentRunHandle {
     if (this._state.isStreaming) {
       throw new Error('Agent is already processing a prompt');
     }
-    if (this.pausedRunId) {
-      throw new Error('Agent is paused awaiting a decision; call resume() or abort() first');
-    }
 
     const message = typeof input === 'string' ? createUserMessage(input) : input;
-    await this.runLoop({ runId: this.generateRunId(), initialMessages: [message] });
+
+    return new DefaultAgentRunHandle(async (push, signal) =>
+      this.runLoop({
+        initialMessages: [message],
+        externalPush: push ?? undefined,
+        externalAbortSignal: signal,
+      })
+    );
   }
 
-  async continue(): Promise<void> {
+  continue(): AgentRunHandle {
     if (this._state.isStreaming) {
       throw new Error('Agent is already processing');
-    }
-    if (this.pausedRunId) {
-      throw new Error('Agent is paused awaiting a decision; call resume() or abort() first');
     }
 
     const lastMessage = this._state.messages[this._state.messages.length - 1];
     if (!lastMessage) {
       throw new Error('No messages to continue from');
     }
+
     if (lastMessage.role === 'assistant') {
-      throw new Error('Cannot continue from message role: assistant');
+      const pendingDecisions = this.findPendingDecisions(lastMessage);
+      if (pendingDecisions.length === 0) {
+        throw new Error(
+          'Cannot continue from trailing assistant message: no tool calls awaiting a decision'
+        );
+      }
+      for (const { tool, decision } of pendingDecisions) {
+        const errors = validateSchema(tool.decision!, decision, 'root');
+        if (errors.length > 0) {
+          throw new DecisionValidationError(tool.name, errors);
+        }
+      }
     }
 
-    await this.runLoop({ runId: this.generateRunId() });
+    return new DefaultAgentRunHandle(async (push, signal) =>
+      this.runLoop({
+        externalPush: push ?? undefined,
+        externalAbortSignal: signal,
+      })
+    );
   }
 
-  get pendingRunId(): string | undefined {
-    return this.pausedRunId;
-  }
+  private findPendingDecisions(
+    message: AssistantMessage
+  ): Array<{ toolCall: ToolCallContent; tool: AgentTool; decision: unknown }> {
+    const completedToolCallIds = new Set(
+      this._state.messages
+        .filter((m): m is Extract<Message, { role: 'toolResult' }> => m.role === 'toolResult')
+        .map((m) => m.toolCallId)
+    );
 
-  async resume(runId: string, decision: unknown): Promise<void> {
-    if (this._state.isStreaming) {
-      throw new Error('Agent is already processing');
+    const pending: Array<{ toolCall: ToolCallContent; tool: AgentTool; decision: unknown }> = [];
+    for (const block of message.content) {
+      if (block.type !== 'toolCall') {
+        continue;
+      }
+      if (completedToolCallIds.has(block.id)) {
+        continue;
+      }
+      if (!('decision' in block) || block.decision === undefined) {
+        continue;
+      }
+      const tool = this._state.tools.find((t) => t.name === block.name);
+      if (!tool || !tool.decision) {
+        continue;
+      }
+      pending.push({ toolCall: block, tool, decision: block.decision });
     }
-
-    const run = await this.runStore.load(runId);
-    if (!run) {
-      throw new RunNotFoundError(runId);
-    }
-    if (!run.pending) {
-      throw new Error(`Run ${runId} is not paused`);
-    }
-
-    const tool = this._state.tools.find((t) => t.name === run.pending!.toolName);
-    if (!tool) {
-      throw new ToolNotRegisteredError(runId, run.pending.toolName);
-    }
-    if (!tool.decision) {
-      throw new Error(
-        `Tool '${tool.name}' has no decision schema; cannot resume run ${runId}`
-      );
-    }
-
-    const errors = validateSchema(tool.decision, decision, 'root');
-    if (errors.length > 0) {
-      throw new DecisionValidationError(runId, tool.name, errors);
-    }
-
-    this._state.model = run.model;
-    if (run.systemPrompt !== undefined) {
-      this._state.systemPrompt = run.systemPrompt;
-    }
-    this._state.messages = [...run.messages];
-    this.pausedRunId = undefined;
-
-    await this.runLoop({
-      runId,
-      resumeDecision: { toolCallId: run.pending.toolCallId, decision },
-    });
+    return pending;
   }
 
   private async runLoop(opts: {
-    runId: string;
     initialMessages?: Message[];
-    resumeDecision?: { toolCallId: string; decision: unknown };
+    externalPush?: RunChannelPush;
+    externalAbortSignal?: AbortSignal;
   }): Promise<void> {
     this.running = (async () => {
       this.abortController = new AbortController();
+      const localAbortController = this.abortController;
       this._state.isStreaming = true;
       this._state.streamMessage = null;
       this._state.error = undefined;
-      this.currentRunId = opts.runId;
+      if (opts.externalPush) {
+        this.runChannel = { push: opts.externalPush };
+      }
+
+      const onExternalAbort = () => localAbortController.abort();
+      if (opts.externalAbortSignal) {
+        if (opts.externalAbortSignal.aborted) {
+          localAbortController.abort();
+        } else {
+          opts.externalAbortSignal.addEventListener('abort', onExternalAbort, { once: true });
+        }
+      }
 
       try {
-        this.emit({ type: 'agent_start' });
+        await this.emit({ type: 'agent_start' });
 
         if (opts.initialMessages && opts.initialMessages.length > 0) {
           for (const message of opts.initialMessages) {
-            this.emit({ type: 'message_start', message });
+            await this.emit({ type: 'message_start', message });
             this.appendMessage(message);
-            this.emit({ type: 'message_end', message });
+            await this.emit({ type: 'message_end', message });
           }
         }
 
-        let resumeDecision = opts.resumeDecision;
+        let resumingFromTrailingAssistant =
+          this._state.messages[this._state.messages.length - 1]?.role === 'assistant';
 
         while (true) {
           let assistantMessage: AssistantMessage;
 
-          if (resumeDecision) {
+          if (resumingFromTrailingAssistant) {
             const last = this._state.messages[this._state.messages.length - 1];
             if (!last || last.role !== 'assistant') {
               throw new Error('Cannot resume: last message is not an assistant message');
             }
             assistantMessage = last;
+            resumingFromTrailingAssistant = false;
           } else {
-            this.emit({ type: 'turn_start' });
-            assistantMessage = await this.generateAssistantMessage(this.abortController.signal);
+            await this.emit({ type: 'turn_start' });
+            assistantMessage = await this.generateAssistantMessage(localAbortController.signal);
             this.appendMessage(assistantMessage);
-            this.emit({ type: 'message_end', message: assistantMessage });
+            await this.emit({ type: 'message_end', message: assistantMessage });
 
             if (assistantMessage.stopReason === 'error' || assistantMessage.stopReason === 'aborted') {
               this._state.error = assistantMessage.errorMessage;
-              this.emit({ type: 'turn_end', message: assistantMessage, toolResults: [] });
+              await this.emit({ type: 'turn_end', message: assistantMessage, toolResults: [] });
               break;
             }
           }
@@ -250,32 +249,29 @@ export class Agent {
             (block): block is ToolCallContent => block.type === 'toolCall'
           );
           if (toolCalls.length === 0) {
-            this.emit({ type: 'turn_end', message: assistantMessage, toolResults: [] });
+            await this.emit({ type: 'turn_end', message: assistantMessage, toolResults: [] });
             break;
           }
 
-          const outcome = await this.executeToolCalls(
-            toolCalls,
-            this.abortController.signal,
-            resumeDecision
-          );
-          resumeDecision = undefined;
+          const outcome = await this.executeToolCalls(toolCalls, localAbortController.signal);
 
           if (outcome.status === 'paused') {
             return;
           }
 
-          this.emit({ type: 'turn_end', message: assistantMessage, toolResults: outcome.results });
+          await this.emit({ type: 'turn_end', message: assistantMessage, toolResults: outcome.results });
         }
 
-        this.emit({ type: 'agent_end', messages: [...this._state.messages] });
-        await this.runStore.delete(opts.runId);
+        await this.emit({ type: 'agent_end', messages: [...this._state.messages] });
       } finally {
+        if (opts.externalAbortSignal) {
+          opts.externalAbortSignal.removeEventListener('abort', onExternalAbort);
+        }
         this._state.isStreaming = false;
         this._state.streamMessage = null;
         this.abortController = undefined;
         this.running = undefined;
-        this.currentRunId = undefined;
+        this.runChannel = undefined;
       }
     })();
 
@@ -302,7 +298,7 @@ export class Agent {
       switch (event.type) {
       case 'start':
         this._state.streamMessage = event.partial;
-        this.emit({ type: 'message_start', message: event.partial });
+        await this.emit({ type: 'message_start', message: event.partial });
         break;
       case 'text_start':
       case 'text_delta':
@@ -314,7 +310,7 @@ export class Agent {
       case 'toolcall_delta':
       case 'toolcall_end':
         this._state.streamMessage = event.partial;
-        this.emit({
+        await this.emit({
           type: 'message_update',
           message: event.partial,
           assistantMessageEvent: event,
@@ -332,8 +328,7 @@ export class Agent {
 
   private async executeToolCalls(
     toolCalls: ToolCallContent[],
-    signal: AbortSignal,
-    resumeDecision?: { toolCallId: string; decision: unknown }
+    signal: AbortSignal
   ): Promise<
     | { status: 'completed'; results: ReturnType<typeof createToolResultMessage>[] }
     | { status: 'paused' }
@@ -353,13 +348,18 @@ export class Agent {
 
       const tool = this._state.tools.find((candidate) => candidate.name === toolCall.name);
       const args = toolCall.arguments as Record<string, unknown>;
-      const isResumeTarget = resumeDecision?.toolCallId === toolCall.id;
+      const decisionAttached = 'decision' in toolCall && toolCall.decision !== undefined;
 
-      if (tool?.decision && !isResumeTarget) {
+      if (tool?.decision && !decisionAttached) {
         let validatedArgs: Record<string, unknown>;
         try {
           validatedArgs = this.validateToolArguments(tool.parameters, args);
         } catch (error) {
+          for (const prior of results) {
+            await this.appendMessageWithEvents(prior);
+          }
+          results.length = 0;
+
           const result: AgentToolResult = {
             content: [
               {
@@ -368,13 +368,13 @@ export class Agent {
               },
             ],
           };
-          this.emit({
+          await this.emit({
             type: 'tool_execution_start',
             toolCallId: toolCall.id,
             toolName: toolCall.name,
             args,
           });
-          this.emit({
+          await this.emit({
             type: 'tool_execution_end',
             toolCallId: toolCall.id,
             toolName: toolCall.name,
@@ -382,36 +382,16 @@ export class Agent {
             isError: true,
           });
           const toolResult = createToolResultMessage(toolCall.id, toolCall.name, result.content, true);
-          this.appendMessageWithEvents(toolResult);
+          await this.appendMessageWithEvents(toolResult);
           continue;
         }
 
         for (const toolResult of results) {
-          this.appendMessageWithEvents(toolResult);
+          await this.appendMessageWithEvents(toolResult);
         }
 
-        const runId = this.currentRunId!;
-        const pending: AgentRunPending = {
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          input: validatedArgs,
-        };
-        const now = Date.now();
-        const run: AgentRun = {
-          id: runId,
-          model: this._state.model,
-          systemPrompt: this._state.systemPrompt,
-          tools: this._state.tools.map(toToolDefinition),
-          messages: [...this._state.messages],
-          pending,
-          createdAt: now,
-          updatedAt: now,
-        };
-        await this.runStore.save(run);
-        this.pausedRunId = runId;
-        this.emit({
+        await this.emit({
           type: 'tool_decision_pending',
-          runId,
           toolCallId: toolCall.id,
           toolName: toolCall.name,
           input: validatedArgs,
@@ -420,7 +400,7 @@ export class Agent {
         return { status: 'paused' };
       }
 
-      const decisionForExecute = isResumeTarget ? resumeDecision!.decision : undefined;
+      const decisionForExecute = decisionAttached ? toolCall.decision : undefined;
       const toolResult = await this.executeOneTool(
         tool,
         toolCall,
@@ -432,7 +412,7 @@ export class Agent {
     }
 
     for (const toolResult of results) {
-      this.appendMessageWithEvents(toolResult);
+      await this.appendMessageWithEvents(toolResult);
     }
 
     return { status: 'completed', results };
@@ -445,7 +425,7 @@ export class Agent {
     decision: unknown,
     signal: AbortSignal
   ): Promise<ReturnType<typeof createToolResultMessage>> {
-    this.emit({
+    await this.emit({
       type: 'tool_execution_start',
       toolCallId: toolCall.id,
       toolName: toolCall.name,
@@ -468,7 +448,7 @@ export class Agent {
         decision,
         signal,
         (partialResult) => {
-          this.emit({
+          void this.emit({
             type: 'tool_execution_update',
             toolCallId: toolCall.id,
             toolName: toolCall.name,
@@ -489,7 +469,7 @@ export class Agent {
       isError = true;
     }
 
-    this.emit({
+    await this.emit({
       type: 'tool_execution_end',
       toolCallId: toolCall.id,
       toolName: toolCall.name,
@@ -500,23 +480,18 @@ export class Agent {
     return createToolResultMessage(toolCall.id, toolCall.name, result.content, isError);
   }
 
-  private appendMessageWithEvents(message: Message): void {
-    this.emit({ type: 'message_start', message });
+  private async appendMessageWithEvents(message: Message): Promise<void> {
+    await this.emit({ type: 'message_start', message });
     this.appendMessage(message);
-    this.emit({ type: 'message_end', message });
+    await this.emit({ type: 'message_end', message });
   }
 
-  private emit(event: AgentEvent): void {
+  private async emit(event: AgentEvent): Promise<void> {
     for (const listener of this.listeners) {
       listener(event);
     }
+    if (this.runChannel) {
+      await this.runChannel.push(event);
+    }
   }
-}
-
-function toToolDefinition(tool: AgentTool): ToolDefinition {
-  return {
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-  };
 }

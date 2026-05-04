@@ -3,6 +3,7 @@ import {
   type Context,
   createAssistantMessageEventStream,
   type ModelDescriptor,
+  type ToolCallContent,
 } from 'agentic-kit';
 import {
   createScriptedProvider,
@@ -15,9 +16,6 @@ import {
   type AgentEvent,
   type AgentTool,
   DecisionValidationError,
-  MemoryRunStore,
-  RunNotFoundError,
-  ToolNotRegisteredError,
 } from '../src';
 
 describe('@agentic-kit/agent', () => {
@@ -229,17 +227,26 @@ describe('@agentic-kit/agent — pausable tools', () => {
     });
   }
 
-  it('pauses on a decision-bearing tool, persists the run, and emits tool_decision_pending', async () => {
+  function attachDecision(agent: Agent, toolCallId: string, decision: unknown): void {
+    const messages = agent.state.messages;
+    const last = messages[messages.length - 1] as AssistantMessage;
+    const updatedContent = last.content.map((block) =>
+      block.type === 'toolCall' && block.id === toolCallId
+        ? ({ ...block, decision } as ToolCallContent)
+        : block
+    );
+    const updated: AssistantMessage = { ...last, content: updatedContent };
+    agent.replaceMessages([...messages.slice(0, -1), updated]);
+  }
+
+  it('pauses on a decision-bearing tool and emits tool_decision_pending without runId', async () => {
     const provider = createScriptedProvider({ responses: [pauseResponse()] });
-    const runStore = new MemoryRunStore();
-    const saveSpy = jest.spyOn(runStore, 'save');
     const execute = jest.fn();
     const events: AgentEvent[] = [];
 
     const agent = new Agent({
       initialState: { model: makeFakeModel() },
       streamFn: provider.stream,
-      runStore,
     });
     agent.subscribe((event) => events.push(event));
     agent.setTools([makeApprovalTool(execute)]);
@@ -247,33 +254,26 @@ describe('@agentic-kit/agent — pausable tools', () => {
     await agent.prompt('approve thing');
 
     expect(execute).not.toHaveBeenCalled();
-    expect(saveSpy).toHaveBeenCalledTimes(1);
+    expect(agent.state.isStreaming).toBe(false);
+    expect(events.some((e) => e.type === 'agent_end')).toBe(false);
 
     const pendingEvent = events.find((e) => e.type === 'tool_decision_pending');
-    expect(pendingEvent).toMatchObject({
+    expect(pendingEvent).toEqual({
       type: 'tool_decision_pending',
       toolCallId: 'tool_1',
       toolName: 'approve',
       input: { target: 'thing' },
       schema: expect.objectContaining({ type: 'object' }),
     });
+    expect(pendingEvent).not.toHaveProperty('runId');
 
-    const runId = (pendingEvent as { runId: string }).runId;
-    expect(runId).toBeTruthy();
-    expect(agent.pendingRunId).toBe(runId);
-    expect(agent.state.isStreaming).toBe(false);
-
-    expect(events.some((e) => e.type === 'agent_end')).toBe(false);
-
-    const stored = await runStore.load(runId);
-    expect(stored).toMatchObject({
-      id: runId,
-      pending: { toolCallId: 'tool_1', toolName: 'approve', input: { target: 'thing' } },
-    });
-    expect(stored?.tools[0]).not.toHaveProperty('execute');
+    const lastMessage = agent.state.messages.at(-1);
+    expect(lastMessage).toMatchObject({ role: 'assistant', stopReason: 'toolUse' });
+    const toolResults = agent.state.messages.filter((m) => m.role === 'toolResult');
+    expect(toolResults).toHaveLength(0);
   });
 
-  it('resume invokes execute with the decision argument and continues the loop', async () => {
+  it('continue() invokes execute with the decision attached to the tool call and continues the loop', async () => {
     const provider = createScriptedProvider({ responses: [pauseResponse(), finalResponse()] });
     const execute = jest.fn(
       async (_id: string, _params: Record<string, unknown>, decision: unknown) => ({
@@ -290,14 +290,13 @@ describe('@agentic-kit/agent — pausable tools', () => {
     agent.setTools([makeApprovalTool(execute)]);
 
     await agent.prompt('approve thing');
-    const runId = agent.pendingRunId!;
-    expect(runId).toBeTruthy();
 
-    await agent.resume(runId, { approved: true });
+    attachDecision(agent, 'tool_1', { approved: true });
+
+    await agent.continue();
 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(execute.mock.calls[0]?.[2]).toEqual({ approved: true });
-    expect(agent.pendingRunId).toBeUndefined();
 
     expect(agent.state.messages.at(-1)).toMatchObject({
       role: 'assistant',
@@ -306,89 +305,178 @@ describe('@agentic-kit/agent — pausable tools', () => {
     expect(events.some((e) => e.type === 'agent_end')).toBe(true);
   });
 
-  it('rejects a malformed decision and leaves the run resumable', async () => {
+  it('continue() throws DecisionValidationError synchronously on a malformed decision', async () => {
     const provider = createScriptedProvider({ responses: [pauseResponse(), finalResponse()] });
-    const runStore = new MemoryRunStore();
-    const execute = jest.fn(
-      async (_id: string, _params: Record<string, unknown>, decision: unknown) => ({
-        content: [{ type: 'text' as const, text: `decision=${JSON.stringify(decision)}` }],
-      })
-    );
+    const execute = jest.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'ok' }],
+    }));
 
     const agent = new Agent({
       initialState: { model: makeFakeModel() },
       streamFn: provider.stream,
-      runStore,
     });
     agent.setTools([makeApprovalTool(execute)]);
 
     await agent.prompt('approve thing');
-    const runId = agent.pendingRunId!;
 
-    await expect(agent.resume(runId, { approved: 'yes' })).rejects.toBeInstanceOf(
-      DecisionValidationError
-    );
+    attachDecision(agent, 'tool_1', { approved: 'yes' });
+
+    expect(() => agent.continue()).toThrow(DecisionValidationError);
     expect(execute).not.toHaveBeenCalled();
-    expect(agent.pendingRunId).toBe(runId);
-    expect(await runStore.load(runId)).toBeDefined();
+    const toolResults = agent.state.messages.filter((m) => m.role === 'toolResult');
+    expect(toolResults).toHaveLength(0);
 
-    await agent.resume(runId, { approved: true });
+    attachDecision(agent, 'tool_1', { approved: true });
+    await agent.continue();
 
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(agent.pendingRunId).toBeUndefined();
-    expect(await runStore.load(runId)).toBeUndefined();
   });
 
-  it('throws RunNotFoundError when resuming an unknown run', async () => {
-    const agent = new Agent({
-      initialState: { model: makeFakeModel() },
-      streamFn: createScriptedProvider({ responses: [] }).stream,
-    });
-
-    await expect(agent.resume('does-not-exist', { approved: true })).rejects.toBeInstanceOf(
-      RunNotFoundError
-    );
-  });
-
-  it('cleans up the persisted run when abort() is called while paused', async () => {
+  it('continue() rejects when the trailing assistant has tool calls but no decisions attached', async () => {
     const provider = createScriptedProvider({ responses: [pauseResponse()] });
-    const runStore = new MemoryRunStore();
 
     const agent = new Agent({
       initialState: { model: makeFakeModel() },
       streamFn: provider.stream,
-      runStore,
     });
     agent.setTools([makeApprovalTool(jest.fn())]);
 
     await agent.prompt('approve thing');
-    const runId = agent.pendingRunId!;
-    expect(await runStore.load(runId)).toBeDefined();
 
-    agent.abort();
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(agent.pendingRunId).toBeUndefined();
-    expect(await runStore.load(runId)).toBeUndefined();
+    expect(() => agent.continue()).toThrow(/no tool calls awaiting a decision/);
   });
 
-  it('throws ToolNotRegisteredError when resuming after the tool has been removed', async () => {
-    const provider = createScriptedProvider({ responses: [pauseResponse(), finalResponse()] });
-    const tool = makeApprovalTool(jest.fn());
+  it('abort() while paused stops further work without throwing', async () => {
+    const provider = createScriptedProvider({ responses: [pauseResponse()] });
 
     const agent = new Agent({
       initialState: { model: makeFakeModel() },
       streamFn: provider.stream,
     });
-    agent.setTools([tool]);
+    agent.setTools([makeApprovalTool(jest.fn())]);
 
     await agent.prompt('approve thing');
-    const runId = agent.pendingRunId!;
 
-    agent.setTools([]);
+    expect(() => agent.abort()).not.toThrow();
+    expect(agent.state.isStreaming).toBe(false);
+  });
 
-    await expect(agent.resume(runId, { approved: true })).rejects.toBeInstanceOf(
-      ToolNotRegisteredError
-    );
+  it('flushes prior tool results before the args-validation error tool_result on a mixed batch', async () => {
+    const provider = createScriptedProvider({
+      responses: [
+        makeFakeAssistantMessage({
+          stopReason: 'toolUse',
+          content: [
+            { type: 'toolCall', id: 'tool_regular', name: 'echo', arguments: { text: 'first' } },
+            { type: 'toolCall', id: 'tool_approve', name: 'approve', arguments: {} },
+          ],
+        }),
+        makeFakeAssistantMessage({
+          stopReason: 'stop',
+          content: [{ type: 'text', text: 'recovered' }],
+        }),
+      ],
+    });
+
+    const regularExecute = jest.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'first-result' }],
+    }));
+    const approveExecute = jest.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'should not run' }],
+    }));
+
+    const agent = new Agent({
+      initialState: { model: makeFakeModel() },
+      streamFn: provider.stream,
+    });
+    agent.setTools([
+      {
+        name: 'echo',
+        label: 'Echo',
+        description: 'Echo text',
+        parameters: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+        },
+        execute: regularExecute,
+      },
+      makeApprovalTool(approveExecute),
+    ]);
+
+    await agent.prompt('go');
+
+    expect(regularExecute).toHaveBeenCalledTimes(1);
+    expect(approveExecute).not.toHaveBeenCalled();
+
+    const messages = agent.state.messages;
+    expect(messages[1]).toMatchObject({ role: 'assistant', stopReason: 'toolUse' });
+    expect(messages[2]).toMatchObject({
+      role: 'toolResult',
+      toolCallId: 'tool_regular',
+      toolName: 'echo',
+      content: [{ type: 'text', text: 'first-result' }],
+    });
+    expect(messages[3]).toMatchObject({
+      role: 'toolResult',
+      toolCallId: 'tool_approve',
+      toolName: 'approve',
+      isError: true,
+    });
+    expect(messages[3].content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('Tool argument validation failed'),
+    });
+    expect(messages[4]).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'recovered' }],
+    });
+  });
+
+  it('regression: a tool without a decision schema runs without pausing', async () => {
+    const provider = createScriptedProvider({
+      responses: [
+        makeFakeAssistantMessage({
+          stopReason: 'toolUse',
+          content: [
+            { type: 'toolCall', id: 'tool_1', name: 'echo', arguments: { text: 'hi' } },
+          ],
+        }),
+        makeFakeAssistantMessage({
+          stopReason: 'stop',
+          content: [{ type: 'text', text: 'done' }],
+        }),
+      ],
+    });
+    const execute = jest.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'hi' }],
+    }));
+
+    const agent = new Agent({
+      initialState: { model: makeFakeModel() },
+      streamFn: provider.stream,
+    });
+    agent.setTools([
+      {
+        name: 'echo',
+        label: 'Echo',
+        description: 'Echo text',
+        parameters: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+        },
+        execute,
+      },
+    ]);
+
+    const events: AgentEvent[] = [];
+    agent.subscribe((e) => events.push(e));
+
+    await agent.prompt('go');
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(events.some((e) => e.type === 'tool_decision_pending')).toBe(false);
+    expect(events.some((e) => e.type === 'agent_end')).toBe(true);
   });
 });

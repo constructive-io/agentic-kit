@@ -10,8 +10,6 @@ import type {
   ToolResultMessage,
 } from 'agentic-kit';
 
-import type { RunStore } from './run-store.js';
-
 export interface AgentToolResult<TDetails = unknown> {
   content: ToolResultMessage<TDetails>['content'];
   details?: TDetails;
@@ -73,7 +71,6 @@ export type AgentEvent =
     }
   | {
       type: 'tool_decision_pending';
-      runId: string;
       toolCallId: string;
       toolName: string;
       input: Record<string, unknown>;
@@ -92,6 +89,4 @@ export interface AgentOptions {
     schema: JsonSchema,
     args: Record<string, unknown>
   ) => Record<string, unknown>;
-  runStore?: RunStore;
-  generateRunId?: () => string;
 }
