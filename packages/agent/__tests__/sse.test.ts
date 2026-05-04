@@ -1,10 +1,7 @@
-// Exercises the `parseSSEStream` helper from tools/test/, not a production
-// parser. The kit ships no SSE parser today; consumers parse on their side.
-// These tests pin down the helper's edge-case behavior so future parser work
-// has a baseline to match.
-import { parseSSEStream } from '@test/index';
-
-import type { AgentEvent } from '../src';
+// Exercises `parseSSEStream` exported from `@agentic-kit/agent`. Symmetric to
+// the SSE producer in `toResponse()` — these tests pin down the parser's
+// edge-case behavior so the wire-format contract has a baseline.
+import { type AgentEvent, parseSSEStream } from '../src';
 
 const encoder = new TextEncoder();
 

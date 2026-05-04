@@ -9,10 +9,9 @@ import {
   createScriptedProvider,
   makeFakeAssistantMessage,
   makeFakeModel,
-  parseSSEStream,
 } from '@test/index';
 
-import { Agent, type AgentEvent, type AgentTool } from '../src';
+import { Agent, type AgentEvent, type AgentTool, parseSSEStream } from '../src';
 
 describe('AgentRunHandle', () => {
   describe('events()', () => {
