@@ -7,7 +7,7 @@ module.exports = {
       'ts-jest',
       {
         babelConfig: false,
-        tsconfig: 'tsconfig.json',
+        tsconfig: '__tests__/tsconfig.json',
       },
     ],
   },
@@ -15,5 +15,6 @@ module.exports = {
   testRegex: '(/__tests__/.*|(\\.|/)(test|spec))\\.(jsx?|tsx?)$',
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
   modulePathIgnorePatterns: ['dist/*'],
+  testPathIgnorePatterns: process.env.OLLAMA_LIVE_READY === '1' ? [] : ['\\.live\\.test\\.ts$'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js']
 };

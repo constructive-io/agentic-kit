@@ -12,7 +12,9 @@
    <a href="https://www.npmjs.com/package/@agentic-kit/ollama"><img height="20" src="https://img.shields.io/github/package-json/v/constructive-io/agentic-kit?filename=packages%2Follama%2Fpackage.json"/></a>
 </p>
 
-A JavaScript/TypeScript client for the Ollama LLM server, supporting model listing, text generation, streaming responses, embeddings, and model management.
+A JavaScript/TypeScript client and provider adapter for the Ollama API,
+supporting model listing, structured streaming text generation, embeddings, and
+model management.
 
 ## Installation
 
@@ -52,13 +54,6 @@ await client.pullModel('mistral');
 const embedding = await client.generateEmbedding('Compute embeddings');
 console.log('Embedding vector length:', embedding.length);
 
-// Generate a conversational response with context
-const response = await client.generateResponse(
-  'What is the capital of France?',
-  'Geography trivia'
-);
-console.log(response);
-
 // Delete a pulled model when done
 await client.deleteModel('mistral');
 ```
@@ -68,11 +63,44 @@ await client.deleteModel('mistral');
 - `new OllamaClient(baseUrl?: string)` – defaults to `http://localhost:11434`
 - `.listModels(): Promise<string[]>`
 - `.generate(input: GenerateInput, onChunk?: (chunk: string) => void): Promise<string | void>`
-- `.generateStreamingResponse(prompt: string, onChunk: (chunk: string) => void, context?: string): Promise<void>`
 - `.generateEmbedding(text: string): Promise<number[]>`
-- `.generateResponse(prompt: string, context?: string): Promise<string>`
 - `.pullModel(model: string): Promise<void>`
 - `.deleteModel(model: string): Promise<void>`
+
+## Provider Adapter
+
+```typescript
+import { OllamaAdapter } from '@agentic-kit/ollama';
+
+const provider = new OllamaAdapter('http://localhost:11434');
+const model = provider.createModel('llama3');
+```
+
+## Local Live Tests
+
+The package includes a local-only live lane that never talks to hosted
+providers.
+
+```bash
+OLLAMA_LIVE_MODEL=qwen3.5:4b pnpm --filter @agentic-kit/ollama test:live
+```
+
+That default command runs the fast smoke tier. Run the broader suite explicitly
+when you want slower behavioral coverage:
+
+```bash
+OLLAMA_LIVE_MODEL=qwen3.5:4b pnpm --filter @agentic-kit/ollama test:live:extended
+```
+
+Notes:
+
+- The preflight checks `OLLAMA_BASE_URL` first and defaults to `http://127.0.0.1:11434`.
+- The default live model is `qwen3.5:4b`; override `OLLAMA_LIVE_MODEL` only if you want a different local model.
+- If `nomic-embed-text:latest` is installed, the live lane also covers local embeddings. Override it with `OLLAMA_LIVE_EMBED_MODEL` if needed.
+- `smoke` covers fast adapter invariants; `extended` runs the smoke tier plus slower behavioral checks such as reasoning metadata, legacy generate, short multi-turn context, and embeddings.
+- If Ollama is not running, or the configured model is not installed, the live
+  script exits cleanly with a skip message.
+- Normal `pnpm test` runs do not include the live lane.
 
 ## GenerateInput type
 
