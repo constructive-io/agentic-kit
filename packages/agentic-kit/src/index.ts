@@ -1,11 +1,11 @@
-import { ANTHROPIC_MODELS, AnthropicAdapter, type AnthropicOptions } from '@agentic-kit/anthropic';
-import { OLLAMA_MODELS,OllamaAdapter, OllamaClient } from '@agentic-kit/ollama';
+import { AnthropicAdapter, type AnthropicOptions } from '@agentic-kit/anthropic';
+import { OllamaAdapter, OllamaClient } from '@agentic-kit/ollama';
 import {
-  OPENAI_COMPATIBLE_MODELS,
   OpenAIAdapter,
   type OpenAIOptions,
 } from '@agentic-kit/openai';
 
+import { registerBuiltInProviders, resetBuiltInProviders } from './builtins.js';
 import { createAssistantMessageEventStream, EventStream } from './event-stream.js';
 import { getMessageText, normalizeContext } from './messages.js';
 import {
@@ -41,6 +41,7 @@ export * from './messages.js';
 export * from './transform-messages.js';
 export * from './types.js';
 
+export { registerBuiltInProviders, resetBuiltInProviders };
 export { createAssistantMessageEventStream, EventStream, OllamaClient };
 export { AnthropicAdapter, OllamaAdapter, OpenAIAdapter };
 export type { AnthropicOptions, OpenAIOptions };
@@ -50,10 +51,7 @@ export type GenerateInput = LegacyGenerateInput;
 
 type NamedProviderAdapter = ProviderAdapter & { name?: string };
 
-registerModels([...OPENAI_COMPATIBLE_MODELS, ...ANTHROPIC_MODELS, ...OLLAMA_MODELS]);
-registerProvider(new OpenAIAdapter());
-registerProvider(new AnthropicAdapter({ apiKey: '' }));
-registerProvider(new OllamaAdapter());
+registerBuiltInProviders();
 
 export function stream(
   model: ModelDescriptor,

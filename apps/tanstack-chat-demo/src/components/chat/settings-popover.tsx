@@ -29,9 +29,9 @@ export function SettingsPopover({ settings, onChange, onRefresh }: Props) {
       <PopoverContent
         align="end"
         sideOffset={8}
-        className="w-[360px] rounded-[16px] border-0 bg-bg-elevated p-0 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.25),0_0_0_0.5px_rgba(0,0,0,0.08)]"
+        className="max-h-[var(--radix-popover-content-available-height)] w-[360px] overflow-hidden rounded-[16px] border-0 bg-bg-elevated p-0 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.25),0_0_0_0.5px_rgba(0,0,0,0.08)]"
       >
-        <div className="px-4 pt-4 pb-3">
+        <div className="shrink-0 px-4 pt-4 pb-3">
           <h3 className="text-[17px] font-semibold text-label" style={{ letterSpacing: '-0.43px' }}>
             Settings
           </h3>
@@ -40,7 +40,7 @@ export function SettingsPopover({ settings, onChange, onRefresh }: Props) {
           </p>
         </div>
 
-        <div className="px-4">
+        <div className="min-h-0 overflow-y-auto px-4">
           <div className="overflow-hidden rounded-[12px] bg-bg-2">
             <Field label="OpenAI key">
               <Input
@@ -79,13 +79,13 @@ export function SettingsPopover({ settings, onChange, onRefresh }: Props) {
               value={settings.systemPrompt}
               onChange={(e) => onChange({ systemPrompt: e.target.value })}
               placeholder="Optional instructions for the assistant"
-              className="mt-1.5 resize-none rounded-[8px] border-0 bg-bg px-2.5 py-2 text-[14px] leading-[1.4] text-label shadow-none placeholder:text-label-3 focus-visible:ring-0"
+              className="mt-1.5 max-h-[min(40dvh,320px)] resize-y overflow-y-auto rounded-[8px] border-0 bg-bg px-2.5 py-2 text-[14px] leading-[1.4] text-label shadow-none ![field-sizing:fixed] placeholder:text-label-3 focus-visible:ring-0"
               style={{ letterSpacing: '-0.15px' }}
             />
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-between border-t border-hairline px-4 py-3">
+        <div className="mt-4 flex shrink-0 items-center justify-between border-t border-hairline px-4 py-3">
           <span className="text-[12.5px] text-label-2">Cached in this browser</span>
           <button
             type="button"
