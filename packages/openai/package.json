@@ -30,6 +30,7 @@
   },
   "keywords": [],
   "dependencies": {
+    "@agentic-kit/core": "workspace:*",
     "cross-fetch": "^4.1.0"
   }
 }

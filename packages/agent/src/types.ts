@@ -8,7 +8,7 @@ import type {
   StreamOptions,
   ToolDefinition,
   ToolResultMessage,
-} from 'agentic-kit';
+} from '@agentic-kit/core';
 
 export interface AgentToolResult<TDetails = unknown> {
   content: ToolResultMessage<TDetails>['content'];

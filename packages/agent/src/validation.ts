@@ -1,4 +1,4 @@
-import type { JsonSchema } from 'agentic-kit';
+import type { JsonSchema } from '@agentic-kit/core';
 
 export function validateToolArguments(
   schema: JsonSchema,

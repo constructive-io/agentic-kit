@@ -1,19 +1,16 @@
 import {
-  type AssistantMessage,
-  type Context,
-  createToolResultMessage,
   createUserMessage,
   type Message,
-  stream,
   type StreamOptions,
-} from 'agentic-kit';
+} from '@agentic-kit/core';
+import { stream } from 'agentic-kit';
 
+import { runAgentLoop } from './agent-loop.js';
 import type {
   AgentEvent,
   AgentOptions,
   AgentState,
   AgentTool,
-  AgentToolResult,
 } from './types.js';
 import { validateToolArguments as defaultValidateToolArguments } from './validation.js';
 
@@ -128,46 +125,21 @@ export class Agent {
       this._state.error = undefined;
 
       try {
-        this.emit({ type: 'agent_start' });
-
-        if (initialMessages && initialMessages.length > 0) {
-          for (const message of initialMessages) {
-            this.emit({ type: 'message_start', message });
-            this.appendMessage(message);
-            this.emit({ type: 'message_end', message });
-          }
-        }
-
-        while (true) {
-          this.emit({ type: 'turn_start' });
-
-          const assistantMessage = await this.generateAssistantMessage(this.abortController.signal);
-          this.appendMessage(assistantMessage);
-          this.emit({ type: 'message_end', message: assistantMessage });
-
-          if (assistantMessage.stopReason === 'error' || assistantMessage.stopReason === 'aborted') {
-            this._state.error = assistantMessage.errorMessage;
-            this.emit({ type: 'turn_end', message: assistantMessage, toolResults: [] });
-            break;
-          }
-
-          const toolCalls = assistantMessage.content.filter((block) => block.type === 'toolCall');
-          if (toolCalls.length === 0) {
-            this.emit({ type: 'turn_end', message: assistantMessage, toolResults: [] });
-            break;
-          }
-
-          const toolResults = await this.executeToolCalls(toolCalls, this.abortController.signal);
-          for (const toolResult of toolResults) {
-            this.emit({ type: 'message_start', message: toolResult });
-            this.appendMessage(toolResult);
-            this.emit({ type: 'message_end', message: toolResult });
-          }
-
-          this.emit({ type: 'turn_end', message: assistantMessage, toolResults });
-        }
-
-        this.emit({ type: 'agent_end', messages: [...this._state.messages] });
+        await runAgentLoop(
+          {
+            initialMessages,
+            state: {
+              ...this._state,
+              messages: [...this._state.messages],
+              tools: [...this._state.tools],
+            },
+            streamFn: this.streamFn,
+            transformContext: this.transformContext,
+            validateToolArguments: this.validateToolArguments,
+            signal: this.abortController.signal,
+          },
+          (event) => this.emit(event)
+        );
       } finally {
         this._state.isStreaming = false;
         this._state.streamMessage = null;
@@ -179,120 +151,30 @@ export class Agent {
     await this.running;
   }
 
-  private async generateAssistantMessage(signal: AbortSignal): Promise<AssistantMessage> {
-    const messages = this.transformContext
-      ? await this.transformContext(this._state.messages, signal)
-      : this._state.messages;
-
-    const context: Context = {
-      systemPrompt: this._state.systemPrompt,
-      tools: this._state.tools,
-      messages,
-    };
-
-    const streamResult = this.streamFn(this._state.model, context, {
-      ...(this._state.streamOptions ?? {}),
-      signal,
-    });
-
-    for await (const event of streamResult) {
-      switch (event.type) {
-      case 'start':
-        this._state.streamMessage = event.partial;
-        this.emit({ type: 'message_start', message: event.partial });
-        break;
-      case 'text_start':
-      case 'text_delta':
-      case 'text_end':
-      case 'thinking_start':
-      case 'thinking_delta':
-      case 'thinking_end':
-      case 'toolcall_start':
-      case 'toolcall_delta':
-      case 'toolcall_end':
-        this._state.streamMessage = event.partial;
-        this.emit({
-          type: 'message_update',
-          message: event.partial,
-          assistantMessageEvent: event,
-        });
-        break;
-      case 'done':
-      case 'error':
-        this._state.streamMessage = null;
-        break;
-      }
-    }
-
-    return streamResult.result();
-  }
-
-  private async executeToolCalls(
-    toolCalls: Array<Extract<AssistantMessage['content'][number], { type: 'toolCall' }>>,
-    signal: AbortSignal
-  ) {
-    const results = [];
-
-    for (const toolCall of toolCalls) {
-      const tool = this._state.tools.find((candidate) => candidate.name === toolCall.name);
-      this.emit({
-        type: 'tool_execution_start',
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        args: toolCall.arguments as Record<string, unknown>,
-      });
-
-      let result: AgentToolResult;
-      let isError = false;
-
-      try {
-        if (!tool) {
-          throw new Error(`Tool '${toolCall.name}' not found`);
-        }
-
-        const validatedArgs = this.validateToolArguments(
-          tool.parameters,
-          toolCall.arguments as Record<string, unknown>
-        );
-
-        result = await tool.execute(toolCall.id, validatedArgs, signal, (partialResult) => {
-          this.emit({
-            type: 'tool_execution_update',
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            args: validatedArgs,
-            partialResult,
-          });
-        });
-      } catch (error) {
-        result = {
-          content: [
-            {
-              type: 'text',
-              text: error instanceof Error ? error.message : String(error),
-            },
-          ],
-        };
-        isError = true;
-      }
-
-      this.emit({
-        type: 'tool_execution_end',
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        result,
-        isError,
-      });
-
-      results.push(
-        createToolResultMessage(toolCall.id, toolCall.name, result.content, isError)
-      );
-    }
-
-    return results;
-  }
-
   private emit(event: AgentEvent): void {
+    switch (event.type) {
+    case 'message_start':
+    case 'message_update':
+      if (event.message.role === 'assistant') {
+        this._state.streamMessage = event.message;
+      }
+      break;
+    case 'message_end':
+      this._state.messages = [...this._state.messages, event.message];
+      if (event.message.role === 'assistant') {
+        this._state.streamMessage = null;
+      }
+      break;
+    case 'turn_end':
+      if (event.message.stopReason === 'error' || event.message.stopReason === 'aborted') {
+        this._state.error = event.message.errorMessage;
+      }
+      break;
+    case 'agent_end':
+      this._state.streamMessage = null;
+      break;
+    }
+
     for (const listener of this.listeners) {
       listener(event);
     }

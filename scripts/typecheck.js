@@ -3,6 +3,7 @@
 const { spawnSync } = require('node:child_process');
 
 const packageDirs = [
+  'packages/core',
   'packages/anthropic',
   'packages/openai',
   'packages/ollama',
@@ -16,6 +17,19 @@ const configs = packageDirs.flatMap((dir) => [
 ]);
 
 const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+
+console.log('[typecheck] packages/core build');
+const coreBuild = spawnSync(pnpmCommand, ['--filter', '@agentic-kit/core', 'run', 'build'], {
+  stdio: 'inherit',
+});
+
+if (coreBuild.error) {
+  throw coreBuild.error;
+}
+
+if ((coreBuild.status ?? 1) !== 0) {
+  process.exit(coreBuild.status ?? 1);
+}
 
 for (const configPath of configs) {
   console.log(`[typecheck] ${configPath}`);

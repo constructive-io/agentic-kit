@@ -1,8 +1,8 @@
 {
-  "name": "@agentic-kit/ollama",
+  "name": "@agentic-kit/core",
   "version": "1.0.3",
   "author": "Dan Lynch <pyramation@gmail.com>",
-  "description": "Ollama",
+  "description": "Core protocol types and stream primitives for agentic-kit",
   "main": "index.js",
   "module": "esm/index.js",
   "types": "index.d.ts",
@@ -22,18 +22,11 @@
   "scripts": {
     "clean": "makage clean",
     "prepack": "npm run build",
-    "build": "makage build",
-    "build:dev": "makage build --dev",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.esm.json && cp ../../LICENSE dist/LICENSE && cp package.json dist/package.json",
+    "build:dev": "tsc -p tsconfig.json --watch",
     "lint": "eslint . --fix",
     "test": "jest",
-    "test:live": "node ./scripts/run-live-tests.js smoke",
-    "test:live:smoke": "node ./scripts/run-live-tests.js smoke",
-    "test:live:extended": "node ./scripts/run-live-tests.js extended",
     "test:watch": "jest --watch"
   },
-  "keywords": [],
-  "dependencies": {
-    "@agentic-kit/core": "workspace:*",
-    "cross-fetch": "^4.1.0"
-  }
+  "keywords": []
 }
