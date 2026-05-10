@@ -1,8 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-
 import type { Message } from 'agentic-kit';
+import { useState } from 'react';
 
 interface ToolCallCardProps {
   name: string;
@@ -16,8 +15,8 @@ export function ToolCallCard({ name, args, result }: ToolCallCardProps) {
   const status = result ? (result.isError ? 'error' : 'done') : 'pending';
   const resultText = result
     ? result.content
-        .map((c) => (c.type === 'text' ? c.text : `[${c.type} block]`))
-        .join('\n')
+      .map((c) => (c.type === 'text' ? c.text : `[${c.type} block]`))
+      .join('\n')
     : '';
 
   return (

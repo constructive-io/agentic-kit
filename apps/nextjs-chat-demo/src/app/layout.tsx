@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
-
 import './globals.css';
+
+import type { ReactNode } from 'react';
 
 export const metadata = {
   title: 'agentic-kit chat demo',

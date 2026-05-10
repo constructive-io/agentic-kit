@@ -1,9 +1,8 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-
 import type { ToolDecisionPendingEvent } from '@agentic-kit/react';
 import type { AssistantMessage, Message } from 'agentic-kit';
+import { useEffect, useRef } from 'react';
 
 import { cn } from '@/lib/cn';
 
