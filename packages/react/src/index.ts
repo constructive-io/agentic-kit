@@ -1,6 +1,6 @@
 export {
   type ToolDecisionPendingEvent,
+  useChat,
   type UseChatOptions,
   type UseChatResult,
-  useChat,
 } from './use-chat.js';

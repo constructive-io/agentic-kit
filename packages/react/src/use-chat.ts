@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-
 import type { AgentEvent } from '@agentic-kit/agent';
 import { parseSSEStream } from '@agentic-kit/agent';
 import type { AssistantMessage, Message } from 'agentic-kit';
 import { createUserMessage } from 'agentic-kit';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-export type ToolDecisionPendingEvent = Extract<AgentEvent, { type: 'tool_decision_pending' }>;
+export type ToolDecisionPendingEvent = Extract<
+  AgentEvent,
+  { type: 'tool_decision_pending' }
+>;
 
 export interface UseChatOptions {
   api: string;
@@ -28,11 +30,13 @@ export interface UseChatResult {
 }
 
 export function useChat(options: UseChatOptions): UseChatResult {
-  const [messages, setMessages] = useState<Message[]>(() => options.initialMessages ?? []);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [pendingDecision, setPendingDecision] = useState<ToolDecisionPendingEvent | undefined>(
-    undefined
+  const [messages, setMessages] = useState<Message[]>(
+    () => options.initialMessages ?? []
   );
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [pendingDecision, setPendingDecision] = useState<
+    ToolDecisionPendingEvent | undefined
+  >(undefined);
   const [error, setError] = useState<unknown>(undefined);
 
   const messagesRef = useRef(messages);
@@ -49,7 +53,10 @@ export function useChat(options: UseChatOptions): UseChatResult {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const runStream = useCallback(
-    async (requestMessages: Message[], optimisticUserMessage: Message | null): Promise<void> => {
+    async (
+      requestMessages: Message[],
+      optimisticUserMessage: Message | null
+    ): Promise<void> => {
       const opts = optionsRef.current;
       const myRun = ++runIdRef.current;
 
@@ -109,60 +116,60 @@ export function useChat(options: UseChatOptions): UseChatResult {
           if (!isCurrent()) return;
 
           switch (event.type) {
-            case 'message_start': {
-              if (skipUserEcho && event.message.role === 'user') {
-                skipUserEcho = false;
-                break;
-              }
+          case 'message_start': {
+            if (skipUserEcho && event.message.role === 'user') {
+              skipUserEcho = false;
+              break;
+            }
+            setMessages((prev) => {
+              if (!isCurrent()) return prev;
+              return [...prev, event.message];
+            });
+            break;
+          }
+          case 'message_update': {
+            setMessages((prev) => {
+              if (!isCurrent()) return prev;
+              if (prev.length === 0) return prev;
+              const last = prev[prev.length - 1];
+              if (last.role !== 'assistant') return prev;
+              return [...prev.slice(0, -1), event.message];
+            });
+            break;
+          }
+          case 'message_end': {
+            if (event.message.role === 'assistant') {
               setMessages((prev) => {
                 if (!isCurrent()) return prev;
+                if (prev.length === 0) return [event.message];
+                const last = prev[prev.length - 1];
+                if (last.role === 'assistant') {
+                  return [...prev.slice(0, -1), event.message];
+                }
                 return [...prev, event.message];
               });
-              break;
             }
-            case 'message_update': {
-              setMessages((prev) => {
-                if (!isCurrent()) return prev;
-                if (prev.length === 0) return prev;
-                const last = prev[prev.length - 1];
-                if (last.role !== 'assistant') return prev;
-                return [...prev.slice(0, -1), event.message];
-              });
-              break;
+            opts.onMessage?.(event.message);
+            break;
+          }
+          case 'tool_decision_pending': {
+            setPendingDecision(event);
+            opts.onDecisionPending?.(event);
+            break;
+          }
+          case 'agent_end': {
+            setMessages(() => {
+              if (!isCurrent()) return messagesRef.current;
+              return event.messages;
+            });
+            const lastAssistant = [...event.messages]
+              .reverse()
+              .find((m): m is AssistantMessage => m.role === 'assistant');
+            if (lastAssistant) {
+              opts.onFinish?.(lastAssistant);
             }
-            case 'message_end': {
-              if (event.message.role === 'assistant') {
-                setMessages((prev) => {
-                  if (!isCurrent()) return prev;
-                  if (prev.length === 0) return [event.message];
-                  const last = prev[prev.length - 1];
-                  if (last.role === 'assistant') {
-                    return [...prev.slice(0, -1), event.message];
-                  }
-                  return [...prev, event.message];
-                });
-              }
-              opts.onMessage?.(event.message);
-              break;
-            }
-            case 'tool_decision_pending': {
-              setPendingDecision(event);
-              opts.onDecisionPending?.(event);
-              break;
-            }
-            case 'agent_end': {
-              setMessages(() => {
-                if (!isCurrent()) return messagesRef.current;
-                return event.messages;
-              });
-              const lastAssistant = [...event.messages]
-                .reverse()
-                .find((m): m is AssistantMessage => m.role === 'assistant');
-              if (lastAssistant) {
-                opts.onFinish?.(lastAssistant);
-              }
-              break;
-            }
+            break;
+          }
           }
         }
       } catch (err) {
@@ -181,7 +188,8 @@ export function useChat(options: UseChatOptions): UseChatResult {
 
   const send = useCallback(
     async (input: string | Message): Promise<void> => {
-      const userMessage: Message = typeof input === 'string' ? createUserMessage(input) : input;
+      const userMessage: Message =
+        typeof input === 'string' ? createUserMessage(input) : input;
       const requestMessages = [...messagesRef.current, userMessage];
       await runStream(requestMessages, userMessage);
     },
@@ -204,9 +212,7 @@ export function useChat(options: UseChatOptions): UseChatResult {
         break;
       }
       if (targetIdx === -1) {
-        throw new Error(
-          `No pending decision for toolCallId '${toolCallId}'`
-        );
+        throw new Error(`No pending decision for toolCallId '${toolCallId}'`);
       }
       const target = current[targetIdx] as AssistantMessage;
       const updatedAssistant: AssistantMessage = {
@@ -248,6 +254,14 @@ export function useChat(options: UseChatOptions): UseChatResult {
       respondWithDecision,
       abort,
     }),
-    [messages, isStreaming, pendingDecision, error, send, respondWithDecision, abort]
+    [
+      messages,
+      isStreaming,
+      pendingDecision,
+      error,
+      send,
+      respondWithDecision,
+      abort,
+    ]
   );
 }
