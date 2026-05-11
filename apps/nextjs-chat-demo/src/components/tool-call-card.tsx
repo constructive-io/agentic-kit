@@ -7,12 +7,19 @@ interface ToolCallCardProps {
   name: string;
   args: Record<string, unknown>;
   result?: Extract<Message, { role: 'toolResult' }>;
+  isExecuting?: boolean;
 }
 
-export function ToolCallCard({ name, args, result }: ToolCallCardProps) {
+export function ToolCallCard({ name, args, result, isExecuting }: ToolCallCardProps) {
   const [open, setOpen] = useState(false);
   const argsSummary = JSON.stringify(args);
-  const status = result ? (result.isError ? 'error' : 'done') : 'pending';
+  const status = result
+    ? result.isError
+      ? 'error'
+      : 'done'
+    : isExecuting
+      ? 'running'
+      : 'pending';
   const resultText = result
     ? result.content
       .map((c) => (c.type === 'text' ? c.text : `[${c.type} block]`))
@@ -37,7 +44,9 @@ export function ToolCallCard({ name, args, result }: ToolCallCardProps) {
               ? 'rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900 dark:text-green-300'
               : status === 'error'
                 ? 'rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900 dark:text-red-300'
-                : 'rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300'
+                : status === 'running'
+                  ? 'rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+                  : 'rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300'
           }
         >
           {status}

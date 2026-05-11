@@ -1,6 +1,7 @@
 'use client';
 
 import { useChat } from '@agentic-kit/react';
+import { createUserMessage, injectDeferralResults } from 'agentic-kit';
 
 import { ChatInput } from './chat-input';
 import { ChatMessages } from './chat-messages';
@@ -28,7 +29,9 @@ export function ChatPanel() {
 
       <ChatMessages
         messages={chat.messages}
-        pendingDecision={chat.pendingDecision}
+        streamingMessage={chat.streamingMessage}
+        pendingDecisions={chat.pendingDecisions}
+        executingToolCallIds={chat.executingToolCallIds}
         respondWithDecision={chat.respondWithDecision}
         isStreaming={chat.isStreaming}
       />
@@ -57,13 +60,26 @@ export function ChatPanel() {
       ) : null}
 
       <ChatInput
-        disabled={chat.isStreaming || chat.pendingDecision !== undefined}
+        disabled={chat.isStreaming}
         onSend={(text) => {
+          // If a decision is pending and the user types instead of clicking a
+          // button, treat the text as their response: synthesize deferral
+          // results for the dangling toolCalls so the next request is clean.
+          if (chat.pendingDecisions.size > 0) {
+            void chat.sendMessages([
+              ...injectDeferralResults(
+                chat.messages,
+                'User chose to respond with a message instead.'
+              ),
+              createUserMessage(text),
+            ]);
+            return;
+          }
           void chat.send(text);
         }}
         placeholder={
-          chat.pendingDecision
-            ? 'Awaiting your decision on the pending tool call…'
+          chat.pendingDecisions.size > 0
+            ? 'Type a response, or use the approve/deny buttons above…'
             : 'Type a message…'
         }
       />

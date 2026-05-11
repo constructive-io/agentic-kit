@@ -11,14 +11,18 @@ import { ToolCallCard } from './tool-call-card';
 
 interface ChatMessagesProps {
   messages: Message[];
-  pendingDecision: ToolDecisionPendingEvent | undefined;
+  streamingMessage: AssistantMessage | null;
+  pendingDecisions: ReadonlyMap<string, ToolDecisionPendingEvent>;
+  executingToolCallIds: ReadonlySet<string>;
   respondWithDecision: (toolCallId: string, value: unknown) => Promise<void>;
   isStreaming: boolean;
 }
 
 export function ChatMessages({
   messages,
-  pendingDecision,
+  streamingMessage,
+  pendingDecisions,
+  executingToolCallIds,
   respondWithDecision,
   isStreaming,
 }: ChatMessagesProps) {
@@ -28,7 +32,7 @@ export function ChatMessages({
     const node = scrollRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
-  }, [messages, isStreaming]);
+  }, [messages, streamingMessage, isStreaming]);
 
   const toolResultsByCallId = new Map<
     string,
@@ -45,7 +49,7 @@ export function ChatMessages({
       ref={scrollRef}
       className="flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900"
     >
-      {messages.length === 0 ? (
+      {messages.length === 0 && !streamingMessage ? (
         <p className="text-sm text-zinc-500">No messages yet. Ask the assistant something.</p>
       ) : null}
 
@@ -68,7 +72,8 @@ export function ChatMessages({
                   <AssistantMessageBody
                     message={m}
                     toolResultsByCallId={toolResultsByCallId}
-                    pendingDecision={pendingDecision}
+                    pendingDecisions={pendingDecisions}
+                    executingToolCallIds={executingToolCallIds}
                     respondWithDecision={respondWithDecision}
                   />
                 </div>
@@ -77,10 +82,23 @@ export function ChatMessages({
           }
           return null;
         })}
-        {isStreaming ? (
+        {streamingMessage ? (
+          <li className="flex justify-start">
+            <div className="flex max-w-[85%] flex-col gap-2">
+              <AssistantMessageBody
+                message={streamingMessage}
+                toolResultsByCallId={toolResultsByCallId}
+                pendingDecisions={pendingDecisions}
+                executingToolCallIds={executingToolCallIds}
+                respondWithDecision={respondWithDecision}
+              />
+            </div>
+          </li>
+        ) : null}
+        {isStreaming && !streamingMessage ? (
           <li className="flex justify-start">
             <div className="rounded-2xl bg-zinc-100 px-3 py-2 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-              streaming…
+              thinking…
             </div>
           </li>
         ) : null}
@@ -92,14 +110,16 @@ export function ChatMessages({
 interface AssistantMessageBodyProps {
   message: AssistantMessage;
   toolResultsByCallId: Map<string, Extract<Message, { role: 'toolResult' }>>;
-  pendingDecision: ToolDecisionPendingEvent | undefined;
+  pendingDecisions: ReadonlyMap<string, ToolDecisionPendingEvent>;
+  executingToolCallIds: ReadonlySet<string>;
   respondWithDecision: (toolCallId: string, value: unknown) => Promise<void>;
 }
 
 function AssistantMessageBody({
   message,
   toolResultsByCallId,
-  pendingDecision,
+  pendingDecisions,
+  executingToolCallIds,
   respondWithDecision,
 }: AssistantMessageBodyProps) {
   return (
@@ -121,15 +141,17 @@ function AssistantMessageBody({
         if (block.type === 'toolCall') {
           const result = toolResultsByCallId.get(block.id);
           const needsDecision =
-            pendingDecision?.toolCallId === block.id &&
+            pendingDecisions.has(block.id) &&
             !result &&
             (!('decision' in block) || block.decision === undefined);
+          const isExecuting = executingToolCallIds.has(block.id);
           return (
             <div key={i} className="flex flex-col gap-2">
               <ToolCallCard
                 name={block.name}
                 args={block.arguments as Record<string, unknown>}
                 result={result}
+                isExecuting={isExecuting}
               />
               {needsDecision ? (
                 <ToolApprovalCard
