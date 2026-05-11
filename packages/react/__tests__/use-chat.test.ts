@@ -26,14 +26,17 @@ function makePartialAssistant(text: string): AssistantMessage {
   });
 }
 
-function makeAssistantWithToolCall(): AssistantMessage {
+function makeAssistantWithToolCall(
+  id = 'call_1',
+  name = 'echo'
+): AssistantMessage {
   return makeFakeAssistantMessage({
     stopReason: 'toolUse',
     content: [
       {
         type: 'toolCall',
-        id: 'call_1',
-        name: 'echo',
+        id,
+        name,
         arguments: { text: 'hi' },
         rawArguments: '{"text":"hi"}',
       },
@@ -46,6 +49,9 @@ describe('useChat', () => {
     const initial: Message[] = [makeUser('hi')];
     const { result } = renderHook(() => useChat({ api: '/chat', initialMessages: initial }));
     expect(result.current.messages).toEqual(initial);
+    expect(result.current.streamingMessage).toBeNull();
+    expect(result.current.pendingDecisions.size).toBe(0);
+    expect(result.current.executingToolCallIds.size).toBe(0);
   });
 
   it('sends, streams, and folds messages into the log', async () => {
@@ -87,12 +93,77 @@ describe('useChat', () => {
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: [{ type: 'text', text: 'world' }] },
     ]);
+    expect(result.current.streamingMessage).toBeNull();
     expect(result.current.isStreaming).toBe(false);
     expect(result.current.error).toBeUndefined();
     expect(onMessage).toHaveBeenCalledTimes(2);
     expect(onFinish).toHaveBeenCalledWith(
       expect.objectContaining({ role: 'assistant', content: [{ type: 'text', text: 'world' }] })
     );
+  });
+
+  it('exposes streamingMessage during stream and clears it on agent_end', async () => {
+    let pushFn!: (event: AgentEvent) => void;
+    let closeFn!: () => void;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        pushFn = (event) =>
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        closeFn = () => controller.close();
+      },
+    });
+    const fetchFn = jest.fn(
+      async (): Promise<Response> =>
+        new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+    );
+    const { result } = renderHook(() => useChat({ api: '/chat', fetch: fetchFn }));
+
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = result.current.send('hi');
+    });
+    await waitFor(() => expect(fetchFn).toHaveBeenCalled());
+
+    pushFn({ type: 'agent_start' });
+    pushFn({ type: 'message_start', message: makePartialAssistant('') });
+    pushFn({
+      type: 'message_update',
+      message: makePartialAssistant('partial'),
+      assistantMessageEvent: {
+        type: 'text_delta',
+        contentIndex: 0,
+        delta: 'partial',
+        partial: makePartialAssistant('partial'),
+      },
+    });
+
+    await waitFor(() =>
+      expect(result.current.streamingMessage?.content).toEqual([
+        { type: 'text', text: 'partial' },
+      ])
+    );
+    expect(result.current.messages).toMatchObject([{ role: 'user', content: 'hi' }]);
+
+    const final = makeFinalAssistant('done');
+    pushFn({ type: 'message_end', message: final });
+    pushFn({
+      type: 'agent_end',
+      messages: [makeUser('hi'), final],
+    });
+    closeFn();
+    await act(async () => {
+      await sendPromise;
+    });
+
+    expect(result.current.streamingMessage).toBeNull();
+    expect(result.current.messages).toMatchObject([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+    ]);
   });
 
   it('forwards body() fields and current messages in the POST body', async () => {
@@ -126,8 +197,6 @@ describe('useChat', () => {
   });
 
   it('drops a malformed SSE event and continues processing valid ones', async () => {
-    // parseSSEStream silently ignores malformed JSON, so the hook never sees a
-    // bogus event but valid events on either side still flow through.
     const final = makeFinalAssistant('survived');
     const encoder = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
@@ -159,6 +228,232 @@ describe('useChat', () => {
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: [{ type: 'text', text: 'survived' }] },
     ]);
+  });
+
+  describe('sendMessages', () => {
+    it('sends the supplied array verbatim without auto-appending', async () => {
+      const final = makeFinalAssistant('ok');
+      const fetchFn = jest.fn(
+        async (_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+          streamFromEvents([
+            { type: 'agent_start' },
+            { type: 'agent_end', messages: [makeUser('a'), makeUser('b'), final] },
+          ])
+      );
+      const { result } = renderHook(() => useChat({ api: '/chat', fetch: fetchFn }));
+
+      const explicit: Message[] = [makeUser('a'), makeUser('b')];
+      await act(async () => {
+        await result.current.sendMessages(explicit);
+      });
+
+      const init = fetchFn.mock.calls[0][1] as RequestInit;
+      const sent = JSON.parse(init.body as string);
+      expect(sent.messages).toEqual(explicit);
+    });
+
+    it('makes input messages visible immediately (before the response arrives)', async () => {
+      let releaseFetch: (() => void) | null = null;
+      const fetchFn = jest.fn(
+        async (_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+          await new Promise<void>((resolve) => {
+            releaseFetch = resolve;
+          });
+          return streamFromEvents([
+            { type: 'agent_start' },
+            { type: 'agent_end', messages: [makeUser('hi'), makeFinalAssistant('hello')] },
+          ]);
+        }
+      );
+      const { result } = renderHook(() => useChat({ api: '/chat', fetch: fetchFn }));
+
+      const input: Message[] = [makeUser('hi')];
+      act(() => {
+        void result.current.sendMessages(input);
+      });
+
+      expect(result.current.messages).toEqual(input);
+      expect(result.current.isStreaming).toBe(true);
+
+      await act(async () => {
+        releaseFetch?.();
+      });
+    });
+  });
+
+  describe('setMessages', () => {
+    it('replaces messages and recomputes pendingDecisions', async () => {
+      const { result } = renderHook(() => useChat({ api: '/chat' }));
+      const withPending: Message[] = [
+        makeUser('hi'),
+        makeAssistantWithToolCall('call_1'),
+      ];
+      act(() => {
+        result.current.setMessages(withPending);
+      });
+      expect(result.current.messages).toEqual(withPending);
+      expect(result.current.pendingDecisions.has('call_1')).toBe(true);
+      expect(result.current.pendingDecisions.get('call_1')).toMatchObject({
+        toolCallId: 'call_1',
+        toolName: 'echo',
+      });
+    });
+
+    it('clears executingToolCallIds and error', async () => {
+      const fetchFn = jest.fn(async (): Promise<Response> => {
+        throw new Error('boom');
+      });
+      const { result } = renderHook(() => useChat({ api: '/chat', fetch: fetchFn }));
+      await act(async () => {
+        await result.current.send('hi');
+      });
+      expect(result.current.error).toBeDefined();
+
+      act(() => {
+        result.current.setMessages([]);
+      });
+      expect(result.current.error).toBeUndefined();
+      expect(result.current.executingToolCallIds.size).toBe(0);
+    });
+
+    it('removes pending entries for decisioned toolCalls', () => {
+      const { result } = renderHook(() => useChat({ api: '/chat' }));
+      const pending: Message[] = [
+        makeUser('hi'),
+        makeAssistantWithToolCall('call_1'),
+      ];
+      act(() => {
+        result.current.setMessages(pending);
+      });
+      expect(result.current.pendingDecisions.has('call_1')).toBe(true);
+
+      const decisioned: Message[] = [
+        makeUser('hi'),
+        makeFakeAssistantMessage({
+          stopReason: 'toolUse',
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call_1',
+              name: 'echo',
+              arguments: { text: 'hi' },
+              rawArguments: '{"text":"hi"}',
+              decision: { action: 'approve' },
+            },
+          ],
+        }),
+      ];
+      act(() => {
+        result.current.setMessages(decisioned);
+      });
+      expect(result.current.pendingDecisions.has('call_1')).toBe(false);
+    });
+
+    it('accepts a setter function', () => {
+      const initial: Message[] = [makeUser('hi')];
+      const { result } = renderHook(() =>
+        useChat({ api: '/chat', initialMessages: initial })
+      );
+      act(() => {
+        result.current.setMessages((prev) => [...prev, makeUser('there')]);
+      });
+      expect(result.current.messages).toHaveLength(2);
+    });
+  });
+
+  describe('executingToolCallIds', () => {
+    it('adds on tool_execution_start, removes on tool_execution_end', async () => {
+      const userEcho = makeUser('hi');
+      const final = makeFinalAssistant('done');
+      const onStart = jest.fn();
+      const onEnd = jest.fn();
+      const fetchFn = jest.fn(
+        async (): Promise<Response> =>
+          streamFromEvents([
+            { type: 'agent_start' },
+            { type: 'message_start', message: userEcho },
+            { type: 'message_end', message: userEcho },
+            {
+              type: 'tool_execution_start',
+              toolCallId: 'call_1',
+              toolName: 'echo',
+              args: { text: 'hi' },
+            },
+            {
+              type: 'tool_execution_end',
+              toolCallId: 'call_1',
+              toolName: 'echo',
+              result: { content: [{ type: 'text', text: 'ok' }] },
+              isError: false,
+            },
+            { type: 'message_end', message: final },
+            { type: 'agent_end', messages: [userEcho, final] },
+          ])
+      );
+
+      const { result } = renderHook(() =>
+        useChat({
+          api: '/chat',
+          fetch: fetchFn,
+          onToolExecutionStart: onStart,
+          onToolExecutionEnd: onEnd,
+        })
+      );
+
+      await act(async () => {
+        await result.current.send('hi');
+      });
+
+      expect(onStart).toHaveBeenCalledWith({
+        toolCallId: 'call_1',
+        toolName: 'echo',
+        args: { text: 'hi' },
+      });
+      expect(onEnd).toHaveBeenCalledWith({
+        toolCallId: 'call_1',
+        toolName: 'echo',
+        result: { content: [{ type: 'text', text: 'ok' }] },
+        isError: false,
+      });
+      expect(result.current.executingToolCallIds.size).toBe(0);
+    });
+
+    it('clears on abort', async () => {
+      let pushFn!: (event: AgentEvent) => void;
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          pushFn = (event) =>
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        },
+      });
+      const fetchFn = jest.fn(
+        async (): Promise<Response> =>
+          new Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          })
+      );
+      const { result } = renderHook(() => useChat({ api: '/chat', fetch: fetchFn }));
+
+      act(() => {
+        void result.current.send('hi');
+      });
+      await waitFor(() => expect(fetchFn).toHaveBeenCalled());
+
+      pushFn({
+        type: 'tool_execution_start',
+        toolCallId: 'call_1',
+        toolName: 'echo',
+        args: {},
+      });
+      await waitFor(() => expect(result.current.executingToolCallIds.has('call_1')).toBe(true));
+
+      act(() => {
+        result.current.abort();
+      });
+      expect(result.current.executingToolCallIds.size).toBe(0);
+    });
   });
 
   describe('abort', () => {
@@ -195,6 +490,172 @@ describe('useChat', () => {
       expect(result.current.error).toBeUndefined();
     });
 
+    it('preserves visible partial text as a committed assistant message', async () => {
+      let pushFn!: (event: AgentEvent) => void;
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          pushFn = (event) =>
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        },
+      });
+      const fetchFn = jest.fn(
+        async (): Promise<Response> =>
+          new Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          })
+      );
+      const { result } = renderHook(() => useChat({ api: '/chat', fetch: fetchFn }));
+
+      act(() => {
+        void result.current.send('hi');
+      });
+      await waitFor(() => expect(fetchFn).toHaveBeenCalled());
+
+      pushFn({ type: 'agent_start' });
+      pushFn({ type: 'message_start', message: makePartialAssistant('') });
+      pushFn({
+        type: 'message_update',
+        message: makePartialAssistant('partial answer'),
+        assistantMessageEvent: {
+          type: 'text_delta',
+          contentIndex: 0,
+          delta: 'partial answer',
+          partial: makePartialAssistant('partial answer'),
+        },
+      });
+      await waitFor(() =>
+        expect(result.current.streamingMessage?.content).toEqual([
+          { type: 'text', text: 'partial answer' },
+        ])
+      );
+
+      act(() => {
+        result.current.abort();
+      });
+
+      expect(result.current.streamingMessage).toBeNull();
+      expect(result.current.isStreaming).toBe(false);
+      expect(result.current.messages).toMatchObject([
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'text', text: 'partial answer' }] },
+      ]);
+    });
+
+    it('drops in-flight tool calls so they do not re-pause as pending decisions', async () => {
+      let pushFn!: (event: AgentEvent) => void;
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          pushFn = (event) =>
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        },
+      });
+      const fetchFn = jest.fn(
+        async (): Promise<Response> =>
+          new Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          })
+      );
+      const { result } = renderHook(() => useChat({ api: '/chat', fetch: fetchFn }));
+
+      act(() => {
+        void result.current.send('hi');
+      });
+      await waitFor(() => expect(fetchFn).toHaveBeenCalled());
+
+      const partialWithTool = makeFakeAssistantMessage({
+        content: [
+          { type: 'text', text: 'preamble' },
+          {
+            type: 'toolCall',
+            id: 'call_inflight',
+            name: 'echo',
+            arguments: { text: 'hi' },
+            rawArguments: '{"text":"hi"}',
+          },
+        ],
+      });
+      pushFn({ type: 'agent_start' });
+      pushFn({ type: 'message_start', message: makePartialAssistant('') });
+      pushFn({
+        type: 'message_update',
+        message: partialWithTool,
+        assistantMessageEvent: {
+          type: 'text_delta',
+          contentIndex: 0,
+          delta: 'preamble',
+          partial: partialWithTool,
+        },
+      });
+
+      await waitFor(() =>
+        expect(result.current.streamingMessage?.content).toHaveLength(2)
+      );
+
+      act(() => {
+        result.current.abort();
+      });
+
+      expect(result.current.streamingMessage).toBeNull();
+      expect(result.current.messages).toHaveLength(2);
+      const committed = result.current.messages[1];
+      expect(committed.role).toBe('assistant');
+      expect((committed as AssistantMessage).content).toEqual([
+        { type: 'text', text: 'preamble' },
+      ]);
+      expect(result.current.pendingDecisions.size).toBe(0);
+    });
+
+    it('commits nothing when streamingMessage is empty or has no visible text', async () => {
+      let pushFn!: (event: AgentEvent) => void;
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          pushFn = (event) =>
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        },
+      });
+      const fetchFn = jest.fn(
+        async (): Promise<Response> =>
+          new Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          })
+      );
+      const { result } = renderHook(() => useChat({ api: '/chat', fetch: fetchFn }));
+
+      act(() => {
+        void result.current.send('hi');
+      });
+      await waitFor(() => expect(fetchFn).toHaveBeenCalled());
+
+      pushFn({ type: 'agent_start' });
+      pushFn({ type: 'message_start', message: makePartialAssistant('') });
+      await waitFor(() => expect(result.current.streamingMessage).not.toBeNull());
+
+      act(() => {
+        result.current.abort();
+      });
+
+      expect(result.current.messages).toMatchObject([{ role: 'user', content: 'hi' }]);
+      expect(result.current.messages).toHaveLength(1);
+    });
+
+    it('commits nothing when no streamingMessage exists', async () => {
+      const { result } = renderHook(() => useChat({ api: '/chat' }));
+
+      act(() => {
+        result.current.abort();
+      });
+
+      expect(result.current.messages).toEqual([]);
+      expect(result.current.streamingMessage).toBeNull();
+      expect(result.current.isStreaming).toBe(false);
+    });
+
     it('drops events that arrive after abort', async () => {
       let pushFn!: (event: AgentEvent) => void;
       let closeFn!: () => void;
@@ -227,10 +688,6 @@ describe('useChat', () => {
       });
       expect(result.current.isStreaming).toBe(false);
 
-      // Push a late event after abort. The for-await loop should hit the
-      // `if (!isCurrent()) return;` guard and exit without folding it into
-      // state. Awaiting sendPromise is the real synchronization barrier:
-      // runStream resolves via the early return.
       const lateAssistant = makeFinalAssistant('late');
       pushFn({ type: 'agent_end', messages: [makeUser('hi'), lateAssistant] });
       closeFn();
@@ -279,8 +736,9 @@ describe('useChat', () => {
       expect(onDecisionPending).toHaveBeenCalledWith(
         expect.objectContaining({ toolCallId: 'call_1', toolName: 'echo' })
       );
-      expect(result.current.pendingDecision).toMatchObject({ toolCallId: 'call_1' });
-      // Pause = stream ended, hook idle, awaiting a decision.
+      expect(result.current.pendingDecisions.get('call_1')).toMatchObject({
+        toolCallId: 'call_1',
+      });
       expect(result.current.isStreaming).toBe(false);
 
       const resumedAssistant: AssistantMessage = {
@@ -331,14 +789,40 @@ describe('useChat', () => {
       });
 
       expect(result.current.messages).toHaveLength(4);
-      expect(result.current.pendingDecision).toBeUndefined();
+      expect(result.current.pendingDecisions.has('call_1')).toBe(false);
       expect(result.current.isStreaming).toBe(false);
     });
 
+    it('removes only the resolved id from pendingDecisions when multiple are pending', async () => {
+      const a1 = makeAssistantWithToolCall('call_1', 'first');
+      const a2 = makeAssistantWithToolCall('call_2', 'second');
+      const initial: Message[] = [makeUser('hi'), a1, a2];
+
+      const fetchFn = jest.fn(
+        async (): Promise<Response> =>
+          streamFromEvents([
+            { type: 'agent_start' },
+            { type: 'agent_end', messages: initial },
+          ])
+      );
+
+      const { result } = renderHook(() =>
+        useChat({ api: '/chat', fetch: fetchFn })
+      );
+
+      act(() => {
+        result.current.setMessages(initial);
+      });
+      expect(result.current.pendingDecisions.size).toBe(2);
+
+      await act(async () => {
+        await result.current.respondWithDecision('call_1', 'allow');
+      });
+
+      expect(result.current.pendingDecisions.has('call_1')).toBe(false);
+    });
+
     it('finds the pending assistant by toolCallId when a later message was appended', async () => {
-      // Simulates the queue-based architecture: a system note (modelled as a
-      // user-role message) lands after the pause, so the trailing message is
-      // not the assistant carrying the pending tool call.
       const assistantWithToolCall = makeAssistantWithToolCall();
       const trailingNote = makeUser('queued note arrived after pause', 99);
       const initial: Message[] = [
@@ -369,7 +853,6 @@ describe('useChat', () => {
         id: 'call_1',
         decision: 'allow',
       });
-      // Trailing note is preserved in its position.
       expect(sent.messages[2]).toMatchObject({ role: 'user', content: 'queued note arrived after pause' });
     });
 
@@ -384,9 +867,6 @@ describe('useChat', () => {
     });
 
     it('skips assistants whose matching toolCall already has a decision', async () => {
-      // Two assistants with different pending toolCallIds. Only the second
-      // matches; the first should be ignored even though it has a decision
-      // already attached for its own (unrelated) call.
       const earlierWithResolvedDecision = makeFakeAssistantMessage({
         stopReason: 'toolUse',
         content: [
@@ -424,13 +904,11 @@ describe('useChat', () => {
       });
 
       const sent = JSON.parse(fetchFn.mock.calls[0][1]!.body as string);
-      // Earlier assistant's already-resolved decision is untouched.
       expect(sent.messages[1].content[0]).toMatchObject({
         type: 'toolCall',
         id: 'call_resolved',
         decision: 'allow',
       });
-      // Later assistant's matching call gets the new decision.
       expect(sent.messages[3].content[0]).toMatchObject({
         type: 'toolCall',
         id: 'call_1',
@@ -440,35 +918,94 @@ describe('useChat', () => {
   });
 
   describe('error handling', () => {
-    it('sets error on a non-200 response', async () => {
+    it('sets error on a non-200 response and fires onError', async () => {
       const fetchFn = jest.fn(
         async (): Promise<Response> =>
           new Response('boom', { status: 500, statusText: 'Internal Server Error' })
       );
-      const { result } = renderHook(() => useChat({ api: '/chat', fetch: fetchFn }));
+      const onError = jest.fn();
+      const { result } = renderHook(() =>
+        useChat({ api: '/chat', fetch: fetchFn, onError })
+      );
 
       await act(async () => {
         await result.current.send('hi');
       });
 
       expect(result.current.error).toEqual(new Error('HTTP 500: Internal Server Error'));
+      expect(onError).toHaveBeenCalledWith(new Error('HTTP 500: Internal Server Error'));
       expect(result.current.isStreaming).toBe(false);
       expect(result.current.messages).toMatchObject([{ role: 'user', content: 'hi' }]);
     });
 
-    it('sets error on a network failure', async () => {
+    it('sets error on a network failure and fires onError', async () => {
       const fetchFn = jest.fn(async (): Promise<Response> => {
         throw new Error('network down');
       });
-      const { result } = renderHook(() => useChat({ api: '/chat', fetch: fetchFn }));
+      const onError = jest.fn();
+      const { result } = renderHook(() =>
+        useChat({ api: '/chat', fetch: fetchFn, onError })
+      );
 
       await act(async () => {
         await result.current.send('hi');
       });
 
       expect(result.current.error).toEqual(new Error('network down'));
+      expect(onError).toHaveBeenCalledWith(new Error('network down'));
       expect(result.current.isStreaming).toBe(false);
-      expect(result.current.messages).toMatchObject([{ role: 'user', content: 'hi' }]);
+    });
+
+    it('sets error when response has no body', async () => {
+      const fetchFn = jest.fn(async (): Promise<Response> => {
+        const r = new Response(null, { status: 200 });
+        Object.defineProperty(r, 'body', { value: null, configurable: true });
+        return r;
+      });
+      const onError = jest.fn();
+      const { result } = renderHook(() =>
+        useChat({ api: '/chat', fetch: fetchFn, onError })
+      );
+
+      await act(async () => {
+        await result.current.send('hi');
+      });
+
+      expect(result.current.error).toEqual(new Error('Response has no body'));
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('lifecycle hooks', () => {
+    it('reads handlers from a ref so consumers do not need to memoize', async () => {
+      const final = makeFinalAssistant('ok');
+      const fetchFn = jest.fn(
+        async (): Promise<Response> =>
+          streamFromEvents([
+            { type: 'agent_start' },
+            { type: 'message_start', message: makeUser('hi') },
+            { type: 'message_end', message: makeUser('hi') },
+            { type: 'message_start', message: final },
+            { type: 'message_end', message: final },
+            { type: 'agent_end', messages: [makeUser('hi'), final] },
+          ])
+      );
+
+      const onMessage = jest.fn();
+      const { result, rerender } = renderHook(
+        ({ onMessage: handler }) => useChat({ api: '/chat', fetch: fetchFn, onMessage: handler }),
+        { initialProps: { onMessage } }
+      );
+
+      const newOnMessage = jest.fn();
+      rerender({ onMessage: newOnMessage });
+
+      await act(async () => {
+        await result.current.send('hi');
+      });
+
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(newOnMessage).toHaveBeenCalled();
     });
   });
 });

@@ -1,6 +1,6 @@
-import type { AgentEvent } from '@agentic-kit/agent';
+import type { AgentEvent, AgentToolResult } from '@agentic-kit/agent';
 import { parseSSEStream } from '@agentic-kit/agent';
-import type { AssistantMessage, Message } from 'agentic-kit';
+import type { AssistantMessage, Message, ToolCallContent } from 'agentic-kit';
 import { createUserMessage } from 'agentic-kit';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -9,40 +9,106 @@ export type ToolDecisionPendingEvent = Extract<
   { type: 'tool_decision_pending' }
 >;
 
+export interface ToolExecutionStartEvent {
+  toolCallId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+}
+
+export interface ToolExecutionEndEvent {
+  toolCallId: string;
+  toolName: string;
+  result: AgentToolResult;
+  isError: boolean;
+}
+
 export interface UseChatOptions {
   api: string;
   body?: () => Record<string, unknown>;
   initialMessages?: Message[];
+  fetch?: typeof globalThis.fetch;
+
   onMessage?: (message: Message) => void;
   onFinish?: (message: AssistantMessage) => void;
   onDecisionPending?: (event: ToolDecisionPendingEvent) => void;
-  fetch?: typeof globalThis.fetch;
+  onToolExecutionStart?: (event: ToolExecutionStartEvent) => void;
+  onToolExecutionEnd?: (event: ToolExecutionEndEvent) => void;
+  onError?: (error: unknown) => void;
 }
 
 export interface UseChatResult {
   messages: Message[];
+  streamingMessage: AssistantMessage | null;
   isStreaming: boolean;
-  pendingDecision: ToolDecisionPendingEvent | undefined;
+  pendingDecisions: ReadonlyMap<string, ToolDecisionPendingEvent>;
+  executingToolCallIds: ReadonlySet<string>;
   error: unknown;
+
   send: (input: string | Message) => Promise<void>;
+  sendMessages: (messages: Message[]) => Promise<void>;
+  setMessages: (msgs: Message[] | ((prev: Message[]) => Message[])) => void;
   respondWithDecision: (toolCallId: string, value: unknown) => Promise<void>;
   abort: () => void;
 }
 
+/**
+ * Compute the pendingDecisions map from a messages array. A toolCall counts as
+ * pending when it has neither a `decision` field nor a paired `toolResult`.
+ *
+ * Used on `setMessages` to recompute server-derived state from the new array.
+ * The synthesized event is a stub (no `input`, no `schema`) — the original
+ * decision-pending event is not recoverable from messages alone, but the map
+ * key (toolCallId) is what consumers actually need to render decision UI.
+ */
+function rederivePendingDecisions(
+  messages: Message[]
+): Map<string, ToolDecisionPendingEvent> {
+  const completed = new Set<string>();
+  for (const m of messages) {
+    if (m.role === 'toolResult') completed.add(m.toolCallId);
+  }
+  const pending = new Map<string, ToolDecisionPendingEvent>();
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    for (const block of m.content) {
+      if (block.type !== 'toolCall') continue;
+      if (completed.has(block.id)) continue;
+      if ('decision' in block && block.decision !== undefined) continue;
+      pending.set(block.id, {
+        type: 'tool_decision_pending',
+        toolCallId: block.id,
+        toolName: block.name,
+        input: block.arguments,
+        schema: { type: 'object' },
+      });
+    }
+  }
+  return pending;
+}
+
 export function useChat(options: UseChatOptions): UseChatResult {
-  const [messages, setMessages] = useState<Message[]>(
+  const [messages, setMessagesState] = useState<Message[]>(
     () => options.initialMessages ?? []
   );
+  const [streamingMessage, setStreamingMessage] = useState<AssistantMessage | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [pendingDecision, setPendingDecision] = useState<
-    ToolDecisionPendingEvent | undefined
-  >(undefined);
+  const [pendingDecisions, setPendingDecisions] = useState<
+    ReadonlyMap<string, ToolDecisionPendingEvent>
+  >(() => new Map());
+  const [executingToolCallIds, setExecutingToolCallIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
   const [error, setError] = useState<unknown>(undefined);
 
   const messagesRef = useRef(messages);
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  const streamingMessageRef = useRef<AssistantMessage | null>(null);
+  useEffect(() => {
+    streamingMessageRef.current = streamingMessage;
+  }, [streamingMessage]);
 
   const optionsRef = useRef(options);
   useEffect(() => {
@@ -51,6 +117,12 @@ export function useChat(options: UseChatOptions): UseChatResult {
 
   const runIdRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const failRun = useCallback((err: unknown) => {
+    setError(err);
+    optionsRef.current.onError?.(err);
+    setIsStreaming(false);
+  }, []);
 
   const runStream = useCallback(
     async (
@@ -68,9 +140,11 @@ export function useChat(options: UseChatOptions): UseChatResult {
 
       setIsStreaming(true);
       setError(undefined);
-      setPendingDecision(undefined);
+      setPendingDecisions(new Map());
+      setExecutingToolCallIds(new Set());
+      setStreamingMessage(null);
       if (optimisticUserMessage) {
-        setMessages((prev) => [...prev, optimisticUserMessage]);
+        setMessagesState((prev) => [...prev, optimisticUserMessage]);
       }
 
       let skipUserEcho = optimisticUserMessage !== null;
@@ -92,22 +166,19 @@ export function useChat(options: UseChatOptions): UseChatResult {
           if (isCurrent()) setIsStreaming(false);
           return;
         }
-        setError(err);
-        setIsStreaming(false);
+        failRun(err);
         return;
       }
 
       if (!isCurrent()) return;
 
       if (!response.ok) {
-        setError(new Error(`HTTP ${response.status}: ${response.statusText}`));
-        setIsStreaming(false);
+        failRun(new Error(`HTTP ${response.status}: ${response.statusText}`));
         return;
       }
 
       if (!response.body) {
-        setError(new Error('Response has no body'));
-        setIsStreaming(false);
+        failRun(new Error('Response has no body'));
         return;
       }
 
@@ -116,66 +187,88 @@ export function useChat(options: UseChatOptions): UseChatResult {
           if (!isCurrent()) return;
 
           switch (event.type) {
-          case 'message_start': {
-            if (skipUserEcho && event.message.role === 'user') {
-              skipUserEcho = false;
+            case 'message_start': {
+              if (skipUserEcho && event.message.role === 'user') {
+                skipUserEcho = false;
+                break;
+              }
+              if (event.message.role === 'assistant') {
+                setStreamingMessage(event.message);
+              }
               break;
             }
-            setMessages((prev) => {
-              if (!isCurrent()) return prev;
-              return [...prev, event.message];
-            });
-            break;
-          }
-          case 'message_update': {
-            setMessages((prev) => {
-              if (!isCurrent()) return prev;
-              if (prev.length === 0) return prev;
-              const last = prev[prev.length - 1];
-              if (last.role !== 'assistant') return prev;
-              return [...prev.slice(0, -1), event.message];
-            });
-            break;
-          }
-          case 'message_end': {
-            if (event.message.role === 'assistant') {
-              setMessages((prev) => {
-                if (!isCurrent()) return prev;
-                if (prev.length === 0) return [event.message];
-                const last = prev[prev.length - 1];
-                if (last.role === 'assistant') {
-                  return [...prev.slice(0, -1), event.message];
-                }
-                return [...prev, event.message];
+            case 'message_update': {
+              setStreamingMessage(event.message);
+              break;
+            }
+            case 'message_end': {
+              if (event.message.role === 'assistant') {
+                setStreamingMessage(null);
+                setMessagesState((prev) => [...prev, event.message]);
+              } else if (event.message.role === 'toolResult') {
+                setMessagesState((prev) => [...prev, event.message]);
+              }
+              opts.onMessage?.(event.message);
+              break;
+            }
+            case 'tool_execution_start': {
+              setExecutingToolCallIds((prev) => {
+                const next = new Set(prev);
+                next.add(event.toolCallId);
+                return next;
               });
+              opts.onToolExecutionStart?.({
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                args: event.args,
+              });
+              break;
             }
-            opts.onMessage?.(event.message);
-            break;
-          }
-          case 'tool_decision_pending': {
-            setPendingDecision(event);
-            opts.onDecisionPending?.(event);
-            break;
-          }
-          case 'agent_end': {
-            setMessages(() => {
-              if (!isCurrent()) return messagesRef.current;
-              return event.messages;
-            });
-            const lastAssistant = [...event.messages]
-              .reverse()
-              .find((m): m is AssistantMessage => m.role === 'assistant');
-            if (lastAssistant) {
-              opts.onFinish?.(lastAssistant);
+            case 'tool_execution_end': {
+              setExecutingToolCallIds((prev) => {
+                if (!prev.has(event.toolCallId)) return prev;
+                const next = new Set(prev);
+                next.delete(event.toolCallId);
+                return next;
+              });
+              opts.onToolExecutionEnd?.({
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                result: event.result,
+                isError: event.isError,
+              });
+              break;
             }
-            break;
-          }
+            case 'tool_decision_pending': {
+              setPendingDecisions((prev) => {
+                const next = new Map(prev);
+                next.set(event.toolCallId, event);
+                return next;
+              });
+              opts.onDecisionPending?.(event);
+              break;
+            }
+            case 'agent_end': {
+              setStreamingMessage(null);
+              setMessagesState(() => {
+                if (!isCurrent()) return messagesRef.current;
+                return event.messages;
+              });
+              const lastAssistant = [...event.messages]
+                .reverse()
+                .find((m): m is AssistantMessage => m.role === 'assistant');
+              if (lastAssistant) {
+                opts.onFinish?.(lastAssistant);
+              }
+              break;
+            }
           }
         }
       } catch (err) {
         if (!isCurrent()) return;
         if (controller.signal.aborted) return;
-        setError(err);
+        failRun(err);
+        return;
       } finally {
         if (isCurrent()) {
           setIsStreaming(false);
@@ -183,7 +276,16 @@ export function useChat(options: UseChatOptions): UseChatResult {
         }
       }
     },
-    []
+    [failRun]
+  );
+
+  const sendMessages = useCallback(
+    async (msgs: Message[]): Promise<void> => {
+      setMessagesState(msgs);
+      messagesRef.current = msgs;
+      await runStream(msgs, null);
+    },
+    [runStream]
   );
 
   const send = useCallback(
@@ -221,7 +323,7 @@ export function useChat(options: UseChatOptions): UseChatResult {
           if (block.type !== 'toolCall' || block.id !== toolCallId) {
             return block;
           }
-          return { ...block, decision: value };
+          return { ...(block as ToolCallContent), decision: value };
         }),
       };
       const requestMessages = [
@@ -229,37 +331,81 @@ export function useChat(options: UseChatOptions): UseChatResult {
         updatedAssistant,
         ...current.slice(targetIdx + 1),
       ];
-      setMessages(requestMessages);
+      setMessagesState(requestMessages);
       messagesRef.current = requestMessages;
-      setPendingDecision(undefined);
+      setPendingDecisions((prev) => {
+        if (!prev.has(toolCallId)) return prev;
+        const next = new Map(prev);
+        next.delete(toolCallId);
+        return next;
+      });
       await runStream(requestMessages, null);
     },
     [runStream]
+  );
+
+  const setMessages = useCallback(
+    (update: Message[] | ((prev: Message[]) => Message[])): void => {
+      setMessagesState((prev) => {
+        const next = typeof update === 'function' ? update(prev) : update;
+        messagesRef.current = next;
+        setPendingDecisions(rederivePendingDecisions(next));
+        setExecutingToolCallIds(new Set());
+        setError(undefined);
+        return next;
+      });
+    },
+    []
   );
 
   const abort = useCallback(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     runIdRef.current++;
+
+    // Snapshot the in-flight assistant message before clearing so visible text
+    // survives the stop. Drop toolCall blocks — without results they'd surface
+    // as pending decisions via rederivePendingDecisions and re-pause the agent.
+    const partial = streamingMessageRef.current;
+    if (partial) {
+      const visible = partial.content.filter(
+        (b) => b.type === 'text' && b.text.length > 0
+      );
+      if (visible.length > 0) {
+        setMessagesState((prev) => [...prev, { ...partial, content: visible }]);
+      }
+    }
+
     setIsStreaming(false);
+    setStreamingMessage(null);
+    setExecutingToolCallIds(new Set());
+    setPendingDecisions(new Map());
   }, []);
 
   return useMemo(
     () => ({
       messages,
+      streamingMessage,
       isStreaming,
-      pendingDecision,
+      pendingDecisions,
+      executingToolCallIds,
       error,
       send,
+      sendMessages,
+      setMessages,
       respondWithDecision,
       abort,
     }),
     [
       messages,
+      streamingMessage,
       isStreaming,
-      pendingDecision,
+      pendingDecisions,
+      executingToolCallIds,
       error,
       send,
+      sendMessages,
+      setMessages,
       respondWithDecision,
       abort,
     ]
