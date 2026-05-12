@@ -45,13 +45,6 @@ const message = await complete(model!, {
 console.log(message.content);
 ```
 
-## Requirements
-
-Node `>=18.17.0`. The provider adapters use `globalThis.fetch` directly — no
-ponyfill, no polyfill. All supported runtimes (modern browsers, Bun, Deno, and
-Node 18.17+) ship a Web-standard fetch with a `ReadableStream` body, which the
-adapters need for SSE.
-
 ## Consuming from webpack / Next.js
 
 The packages publish ESM with `.js`-suffixed relative imports (e.g.
