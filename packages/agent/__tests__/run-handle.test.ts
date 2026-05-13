@@ -304,6 +304,23 @@ describe('AgentRunHandle', () => {
       expect(getSignal()?.aborted).toBe(true);
       expect(agent.state.isStreaming).toBe(false);
     });
+
+    it('aborts streamFn when events() iteration breaks early', async () => {
+      const { streamFn, getSignal } = makeAbortableStreamFn();
+      const agent = new Agent({
+        initialState: { model: makeFakeModel() },
+        streamFn,
+      });
+
+      const handle = agent.prompt('go');
+      for await (const _event of handle.events()) {
+        break;
+      }
+      await agent.waitForIdle();
+
+      expect(getSignal()?.aborted).toBe(true);
+      expect(agent.state.isStreaming).toBe(false);
+    });
   });
 
   describe('single-use enforcement', () => {
@@ -328,6 +345,29 @@ describe('AgentRunHandle', () => {
       expect(() => handle.events()).toThrow(/already consumed/);
     });
 
+    it('throws on a second prompt() while a handle from the first is still unconsumed', () => {
+      const provider = createScriptedProvider({
+        responses: [
+          makeFakeAssistantMessage({
+            stopReason: 'stop',
+            content: [{ type: 'text', text: 'x' }],
+          }),
+        ],
+      });
+      const agent = new Agent({
+        initialState: { model: makeFakeModel() },
+        streamFn: provider.stream,
+      });
+
+      const first = agent.prompt('hi');
+      expect(() => agent.prompt('hi again')).toThrow(/unconsumed run handle/);
+
+      // abort frees the agent state; first remains a dangling handle reference
+      agent.abort();
+      expect(() => agent.prompt('after abort')).not.toThrow();
+      void first;
+    });
+
     it('throws when toResponse() is called twice', () => {
       const provider = createScriptedProvider({
         responses: [
@@ -349,8 +389,8 @@ describe('AgentRunHandle', () => {
     });
   });
 
-  describe('PromiseLike auto-sink', () => {
-    it('await on the handle drives the run to completion without an explicit consumer', async () => {
+  describe('wait()', () => {
+    it('drives the run to completion without an explicit event consumer', async () => {
       const provider = createScriptedProvider({
         responses: [
           makeFakeAssistantMessage({
@@ -373,7 +413,7 @@ describe('AgentRunHandle', () => {
       expect(agent.state.isStreaming).toBe(false);
     });
 
-    it('rejects the awaited handle when the binder rejects (e.g. streamFn throws)', async () => {
+    it('rejects when the binder rejects (e.g. streamFn throws)', async () => {
       const agent = new Agent({
         initialState: { model: makeFakeModel() },
         streamFn: () => {
@@ -381,7 +421,7 @@ describe('AgentRunHandle', () => {
         },
       });
 
-      await expect(agent.prompt('hi')).rejects.toThrow(/binder failure/);
+      await expect(agent.prompt('hi').wait()).rejects.toThrow(/binder failure/);
       expect(agent.state.isStreaming).toBe(false);
     });
 

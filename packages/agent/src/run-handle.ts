@@ -11,6 +11,13 @@ export interface AgentRunHandle extends PromiseLike<void> {
   events(): AsyncIterable<AgentEvent>;
   toReadableStream(): ReadableStream<AgentEvent>;
   toResponse(init?: ResponseInit): Response;
+  /**
+   * Run to completion without observing events. Equivalent to `await handle`
+   * (the handle is `PromiseLike<void>`), but explicit. Use this if you want
+   * to avoid accidental thenable assimilation in code paths where the handle
+   * might be passed through generic wrappers.
+   */
+  wait(): Promise<void>;
 }
 
 const DEFAULT_HIGH_WATER_MARK = 8;
@@ -59,14 +66,18 @@ export class DefaultAgentRunHandle implements AgentRunHandle {
     return new Response(sse, responseInit);
   }
 
+  wait(): Promise<void> {
+    if (!this.startedAs) {
+      this.startSink();
+    }
+    return this.completion!;
+  }
+
   then<TResult1 = void, TResult2 = never>(
     onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
   ): Promise<TResult1 | TResult2> {
-    if (!this.startedAs) {
-      this.startSink();
-    }
-    return this.completion!.then(onfulfilled, onrejected);
+    return this.wait().then(onfulfilled, onrejected);
   }
 
   private ensureNotStarted(via: NonNullable<DefaultAgentRunHandle['startedAs']>): void {
@@ -175,15 +186,24 @@ async function* readableStreamToAsyncIterable<T>(
   stream: ReadableStream<T>
 ): AsyncIterableIterator<T> {
   const reader = stream.getReader();
+  let drained = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) {
+        drained = true;
         return;
       }
       yield value;
     }
   } finally {
+    if (!drained) {
+      try {
+        await reader.cancel();
+      } catch {
+        // cancel can reject if the stream already errored — safe to ignore
+      }
+    }
     reader.releaseLock();
   }
 }
