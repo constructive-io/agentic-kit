@@ -43,8 +43,8 @@ console.log(agent.state.messages);
 
 ## Streaming a Run
 
-The `prompt()` and `continue()` methods return an `AgentRunHandle`. Awaiting it
-runs to completion; treating it as a stream yields lifecycle events.
+The `prompt()` and `continue()` methods return an `AgentRunHandle`. A handle
+can be consumed exactly once via one of these methods:
 
 ```ts
 const handle = agent.prompt('Plan a trip to Lisbon.');
@@ -56,9 +56,12 @@ for await (const event of handle.events()) {
 }
 ```
 
-A handle can be consumed exactly once, in one of these ways:
-
-- `await handle` — run to completion without observing events.
+- `await handle` — run to completion without observing events. The handle is
+  `PromiseLike<void>`, so it `await`s directly. Equivalent to `handle.wait()`.
+- `handle.wait()` — explicit form of the above. Prefer this when the handle
+  might be passed through generic wrappers (`Promise.resolve(...)`,
+  `Promise.all([...])`) where accidental thenable assimilation would consume
+  it before you intended.
 - `handle.events()` — iterate `AgentEvent`s.
 - `handle.toReadableStream()` — wrap events in a `ReadableStream<AgentEvent>`.
 - `handle.toResponse(init?)` — wrap events as an SSE `Response`, ready to
@@ -139,7 +142,12 @@ Execution:
 
 - `prompt(input, opts?)` — start a new run from a user message.
 - `continue(opts?)` — resume after a paused decision or after the messages
-  array was edited externally.
+  array was edited externally. If the most recent pending assistant has
+  non-`toolResult` messages appended after it (e.g., a user message
+  injected while the tool was paused), `continue()` throws — use
+  `injectDeferralResults()` + `prompt()` from `agentic-kit` instead, which
+  synthesizes stand-in `toolResult`s before the new user message so the
+  transcript stays well-formed for OpenAI / Anthropic.
 - `abort()` — cancel the active run.
 - `waitForIdle()` — resolves when the current run finishes.
 - `subscribe(listener)` — receive `AgentEvent`s without consuming the handle.
@@ -148,7 +156,7 @@ Execution:
 
 `AgentEvent` is a discriminated union covering the full lifecycle:
 
-- `agent_start`, `agent_end` (with `stopReason: 'completed' | 'max_steps'`)
+- `agent_start`, `agent_end` (with `stopReason: 'completed' | 'max_steps' | 'aborted'`)
 - `turn_start`, `turn_end`
 - `message_start`, `message_update`, `message_end`
 - `tool_execution_start`, `tool_execution_update`, `tool_execution_end`
