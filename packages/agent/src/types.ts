@@ -49,7 +49,7 @@ export interface AgentEventBase {
 
 export type AgentEvent =
   | { type: 'agent_start' }
-  | { type: 'agent_end'; messages: Message[]; stopReason?: 'completed' | 'max_steps' }
+  | { type: 'agent_end'; messages: Message[]; stopReason?: 'completed' | 'max_steps' | 'aborted' }
   | { type: 'turn_start' }
   | { type: 'turn_end'; message: AssistantMessage; toolResults: ToolResultMessage[] }
   | { type: 'message_start'; message: Message }

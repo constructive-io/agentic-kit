@@ -36,6 +36,7 @@ export class Agent {
   private abortController?: AbortController;
   private running?: Promise<void>;
   private runChannel?: { push: RunChannelPush };
+  private outstandingHandle?: AgentRunHandle;
 
   private _state: AgentState;
 
@@ -103,6 +104,7 @@ export class Agent {
 
   abort(): void {
     this.abortController?.abort();
+    this.outstandingHandle = undefined;
   }
 
   waitForIdle(): Promise<void> {
@@ -110,27 +112,28 @@ export class Agent {
   }
 
   prompt(input: string | Message, opts?: { maxSteps?: number }): AgentRunHandle {
-    if (this._state.isStreaming) {
-      throw new Error('Agent is already processing a prompt');
-    }
+    this.assertIdle('prompt');
 
     const message = typeof input === 'string' ? createUserMessage(input) : input;
     this._state.stepCount = 0;
 
-    return new DefaultAgentRunHandle(async (push, signal) =>
-      this.runLoop({
+    const handle: AgentRunHandle = new DefaultAgentRunHandle(async (push, signal) => {
+      if (this.outstandingHandle === handle) {
+        this.outstandingHandle = undefined;
+      }
+      return this.runLoop({
         initialMessages: [message],
         externalPush: push ?? undefined,
         externalAbortSignal: signal,
         maxSteps: opts?.maxSteps ?? this.defaultMaxSteps,
-      })
-    );
+      });
+    });
+    this.outstandingHandle = handle;
+    return handle;
   }
 
   continue(opts?: { maxSteps?: number }): AgentRunHandle {
-    if (this._state.isStreaming) {
-      throw new Error('Agent is already processing');
-    }
+    this.assertIdle('continue');
 
     if (this._state.messages.length === 0) {
       throw new Error('No messages to continue from');
@@ -138,6 +141,14 @@ export class Agent {
 
     const pendingMessage = this.findMostRecentPendingAssistant();
     if (pendingMessage) {
+      const pendingIndex = this._state.messages.indexOf(pendingMessage);
+      const trailing = this._state.messages.slice(pendingIndex + 1);
+      const hasNonToolResultTrailing = trailing.some((m) => m.role !== 'toolResult');
+      if (hasNonToolResultTrailing) {
+        throw new Error(
+          'Cannot continue() with a pending decision when non-toolResult messages have been appended after the pending assistant. Use injectDeferralResults() + prompt() instead — see the agentic-kit deferral docs.'
+        );
+      }
       const pendingDecisions = this.findPendingDecisions(pendingMessage);
       for (const { tool, decision } of pendingDecisions) {
         const errors = validateSchema(tool.decision!, decision, 'root');
@@ -154,13 +165,29 @@ export class Agent {
       }
     }
 
-    return new DefaultAgentRunHandle(async (push, signal) =>
-      this.runLoop({
+    const handle: AgentRunHandle = new DefaultAgentRunHandle(async (push, signal) => {
+      if (this.outstandingHandle === handle) {
+        this.outstandingHandle = undefined;
+      }
+      return this.runLoop({
         externalPush: push ?? undefined,
         externalAbortSignal: signal,
         maxSteps: opts?.maxSteps ?? this.defaultMaxSteps,
-      })
-    );
+      });
+    });
+    this.outstandingHandle = handle;
+    return handle;
+  }
+
+  private assertIdle(method: 'prompt' | 'continue'): void {
+    if (this._state.isStreaming) {
+      throw new Error(`Agent is already processing; cannot call ${method}() while a run is active`);
+    }
+    if (this.outstandingHandle) {
+      throw new Error(
+        `Agent has an unconsumed run handle from a previous ${method}()/prompt()/continue() call; consume it (events / toReadableStream / toResponse / wait) or abort the agent before issuing another`
+      );
+    }
   }
 
   private findMostRecentPendingAssistant(): AssistantMessage | undefined {
@@ -227,7 +254,7 @@ export class Agent {
         }
       }
 
-      let stopReason: 'completed' | 'max_steps' = 'completed';
+      let stopReason: 'completed' | 'max_steps' | 'aborted' = 'completed';
 
       try {
         await this.emit({ type: 'agent_start' });
@@ -286,6 +313,11 @@ export class Agent {
           }
 
           await this.emit({ type: 'turn_end', message: assistantMessage, toolResults: outcome.results });
+
+          if (localAbortController.signal.aborted) {
+            stopReason = 'aborted';
+            break;
+          }
         }
 
         await this.emit({ type: 'agent_end', messages: [...this._state.messages], stopReason });
@@ -370,6 +402,10 @@ export class Agent {
     for (const toolCall of toolCalls) {
       if (completedToolCallIds.has(toolCall.id)) {
         continue;
+      }
+
+      if (signal.aborted) {
+        break;
       }
 
       const tool = this._state.tools.find((candidate) => candidate.name === toolCall.name);

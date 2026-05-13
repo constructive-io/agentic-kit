@@ -347,13 +347,9 @@ describe('@agentic-kit/agent — pausable tools', () => {
     expect(() => agent.continue()).toThrow(/no tool calls awaiting a decision/);
   });
 
-  it('continue() resumes from a non-trailing assistant when a later message was appended after the pause', async () => {
-    const provider = createScriptedProvider({ responses: [pauseResponse(), finalResponse()] });
-    const execute = jest.fn(
-      async (_id: string, _params: Record<string, unknown>, decision: unknown) => ({
-        content: [{ type: 'text' as const, text: `decision=${JSON.stringify(decision)}` }],
-      })
-    );
+  it('continue() rejects when non-toolResult messages have been appended after the pending assistant', async () => {
+    const provider = createScriptedProvider({ responses: [pauseResponse()] });
+    const execute = jest.fn();
 
     const agent = new Agent({
       initialState: { model: makeFakeModel() },
@@ -372,14 +368,8 @@ describe('@agentic-kit/agent — pausable tools', () => {
     };
     agent.replaceMessages([...agent.state.messages, trailingNote]);
 
-    await agent.continue();
-
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute.mock.calls[0]?.[2]).toEqual({ approved: true });
-    expect(agent.state.messages.at(-1)).toMatchObject({
-      role: 'assistant',
-      content: [{ type: 'text', text: 'finalized' }],
-    });
+    expect(() => agent.continue()).toThrow(/non-toolResult messages have been appended/);
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('abort() while paused stops further work without throwing', async () => {
@@ -467,6 +457,67 @@ describe('@agentic-kit/agent — pausable tools', () => {
       role: 'assistant',
       content: [{ type: 'text', text: 'recovered' }],
     });
+  });
+
+  it('abort() during tool execution stops the loop and does not invoke the model again', async () => {
+    const provider = createScriptedProvider({
+      responses: [
+        makeFakeAssistantMessage({
+          stopReason: 'toolUse',
+          content: [
+            { type: 'toolCall', id: 'tool_slow', name: 'slow', arguments: {} },
+          ],
+        }),
+        makeFakeAssistantMessage({
+          stopReason: 'stop',
+          content: [{ type: 'text', text: 'should never reach here' }],
+        }),
+      ],
+    });
+
+    const streamCalls = jest.fn(provider.stream);
+    let abortAgent: (() => void) | undefined;
+    const slowExecute = jest.fn<
+      ReturnType<AgentTool['execute']>,
+      Parameters<AgentTool['execute']>
+    >((_id, _params, _decision, signal) => {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          'abort',
+          () => reject(new Error('aborted')),
+          { once: true }
+        );
+        queueMicrotask(() => abortAgent?.());
+      });
+    });
+
+    const agent = new Agent({
+      initialState: { model: makeFakeModel() },
+      streamFn: streamCalls,
+    });
+    abortAgent = () => agent.abort();
+    agent.setTools([
+      {
+        name: 'slow',
+        label: 'Slow',
+        description: 'Slow tool',
+        parameters: { type: 'object', properties: {} },
+        execute: slowExecute,
+      },
+    ]);
+
+    const events: AgentEvent[] = [];
+    agent.subscribe((e) => events.push(e));
+
+    await agent.prompt('go');
+
+    expect(streamCalls).toHaveBeenCalledTimes(1);
+    expect(slowExecute).toHaveBeenCalledTimes(1);
+    const end = events.find(
+      (e): e is Extract<AgentEvent, { type: 'agent_end' }> => e.type === 'agent_end'
+    );
+    expect(end?.stopReason).toBe('aborted');
+    expect(agent.state.isStreaming).toBe(false);
   });
 
   it('regression: a tool without a decision schema runs without pausing', async () => {
