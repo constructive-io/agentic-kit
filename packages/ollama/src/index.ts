@@ -44,7 +44,7 @@ interface ToolCallContent {
   arguments: Record<string, JsonValue | undefined>;
 }
 
-interface Usage {
+export interface Usage {
   input: number;
   output: number;
   cacheRead: number;
@@ -226,6 +226,13 @@ export interface GenerateInput {
   maxTokens?: number;
 }
 
+export interface GenerateResult {
+  content: string;
+  usage: Usage;
+  model: string;
+  stopReason: 'stop' | 'length' | 'toolUse' | 'error' | 'aborted';
+}
+
 interface OllamaTagsResponse {
   models?: Array<{ name: string }>;
 }
@@ -310,6 +317,15 @@ export class OllamaClient {
     input: GenerateInput,
     onChunk?: (chunk: string) => void
   ): Promise<string | void> {
+    const result = await this.generateWithUsage(input, onChunk);
+    if (onChunk || input.stream) return;
+    return result.content;
+  }
+
+  async generateWithUsage(
+    input: GenerateInput,
+    onChunk?: (chunk: string) => void
+  ): Promise<GenerateResult> {
     const context = legacyInputToContext(input);
     const model: ModelDescriptor = {
       id: input.model,
@@ -336,14 +352,20 @@ export class OllamaClient {
           onChunk?.(event.delta);
         }
       }
-      return;
     }
 
     const message = await response.result();
-    return message.content
+    const content = message.content
       .filter((block): block is TextContent => block.type === 'text')
       .map((block) => block.text)
       .join('');
+
+    return {
+      content,
+      usage: message.usage,
+      model: message.model,
+      stopReason: message.stopReason,
+    };
   }
 }
 
