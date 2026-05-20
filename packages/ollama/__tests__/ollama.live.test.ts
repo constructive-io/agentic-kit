@@ -118,6 +118,69 @@ describeSmoke('Ollama live smoke', () => {
   });
 });
 
+describeSmoke('generateWithUsage token metering', () => {
+  jest.setTimeout(60_000);
+
+  it('returns content and non-zero usage in batch mode', async () => {
+    const client = new OllamaClient(baseUrl);
+    const result = await client.generateWithUsage({
+      model: modelId,
+      prompt: 'Reply with exactly the single word PING and nothing else.',
+      maxTokens: 128,
+      temperature: 0,
+    });
+
+    expect(result.content.toLowerCase()).toContain('ping');
+    expect(result.model).toBeTruthy();
+    expect(result.usage.input).toBeGreaterThan(0);
+    expect(result.usage.output).toBeGreaterThan(0);
+    expect(result.usage.totalTokens).toBeGreaterThanOrEqual(
+      result.usage.input + result.usage.output,
+    );
+    expect(result.stopReason).toBe('stop');
+  });
+
+  it('streams chunks and returns usage after completion', async () => {
+    const client = new OllamaClient(baseUrl);
+    const chunks: string[] = [];
+    const result = await client.generateWithUsage(
+      {
+        model: modelId,
+        prompt: 'Reply with exactly the single word PONG and nothing else.',
+        stream: true,
+        maxTokens: 128,
+        temperature: 0,
+      },
+      (chunk: string) => {
+        chunks.push(chunk);
+      },
+    );
+
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(result.content.toLowerCase()).toContain('pong');
+    expect(result.usage.output).toBeGreaterThan(0);
+    expect(result.usage.totalTokens).toBeGreaterThan(0);
+  });
+
+  it('returns token counts for multi-turn chat', async () => {
+    const client = new OllamaClient(baseUrl);
+    const result = await client.generateWithUsage({
+      model: modelId,
+      messages: [
+        { role: 'user', content: 'Say hello' },
+        { role: 'assistant', content: 'Hello!' },
+        { role: 'user', content: 'Now say goodbye in one word.' },
+      ],
+      maxTokens: 128,
+      temperature: 0,
+    });
+
+    expect(result.content.length).toBeGreaterThan(0);
+    expect(result.usage.input).toBeGreaterThan(0);
+    expect(result.usage.output).toBeGreaterThan(0);
+  });
+});
+
 describeExtended('Ollama live extended', () => {
   jest.setTimeout(60_000);
 
