@@ -1,3 +1,7 @@
+## UPDATE
+
+MOVED TO https://github.com/constructive-io/constructive
+
 # Agentic Kit Monorepo
 
 <p align="center" width="100%">
